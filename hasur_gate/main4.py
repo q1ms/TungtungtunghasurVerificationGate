@@ -18,7 +18,7 @@ import math
 import tkinter
 import io
 from openai import OpenAI
-import requests  # <-- added for direct API calls
+import requests
 
 # ==========================================
 # >>> YOUR API CONFIGURATION <<<
@@ -33,8 +33,8 @@ client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 # MODEL NAMES
 # ==========================================
 TEXT_MODEL = "qwen3.7-plus"
-AUDIO_MODEL = "qwen3-omni-flash"  # or "qwen-audio"
-VISION_MODEL = "qwen-vl-max"       # or "qwen-vl-plus"
+AUDIO_MODEL = "qwen3-omni-flash"
+VISION_MODEL = "qwen-vl-max"       # fallback: qwen-vl-plus, qwen-vl
 
 # ==========================================
 # CONFIGURATION
@@ -43,6 +43,7 @@ MAX_ATTEMPTS = 5
 CHANT_DURATION = 6.0
 DANCE_DURATION = 8.0
 BACKGROUND_MUSIC = "assets/background.mp3"
+DANCE_FRAMES = 16                 # number of frames to sample
 
 CHARACTERS = [
     {"name": "Goblin of Confusion", "img": "assets/char1.png", "audio": "assets/char1.mp3"},
@@ -83,7 +84,7 @@ class HasurGateApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # --- SPLASH SCREEN (Booting loading) ---
+        # --- SPLASH SCREEN ---
         self.title("Loading...")
         self.geometry("1200x800")
         self.state('zoomed')
@@ -171,7 +172,7 @@ class HasurGateApp(ctk.CTk):
         self.challenge = {}
         self.is_recording = False
         self.cap = None
-        self.video_writer = None
+        self.frame_counter = 0
         self.audio_data = []
         self.failure_count = 0
         self.failure_receipts = []
@@ -195,14 +196,13 @@ class HasurGateApp(ctk.CTk):
         self.chant_passed = False
         self.dance_passed = False
         
-        self.current_video_filename = ""
+        self.current_frame_folder = ""     # folder where dance frames are saved
         self.current_audio_filename = ""
-        self.current_final_filename = ""
         self.current_audio_process = None
         self.background_music_process = None
         self.audio_stream = None
         
-        # Define brainrot phrases to detect
+        # Brainrot phrases to detect
         self.brainrot_phrases = [
             "skibidi", "sigma", "gyatt", "fanum tax", "mewing", "ohio",
             "tung tung tung hasur", "sahur", "brainrot", "rizz", "sus", "no cap", "bet"
@@ -229,8 +229,6 @@ class HasurGateApp(ctk.CTk):
         self.stop_background_music()
         if self.cap is not None:
             self.cap.release()
-        if self.video_writer is not None:
-            self.video_writer.release()
         for f in os.listdir("."):
             if f.startswith("temp_bg_") and f.endswith(".mp3"):
                 try:
@@ -278,13 +276,13 @@ class HasurGateApp(ctk.CTk):
         self.background_music_process = None
     
     # ==========================================
-    # UI SETUP - ChatGPT grey theme with separate pages
+    # UI SETUP - ChatGPT grey theme
     # ==========================================
     def setup_ui(self):
         self.main_container = ctk.CTkFrame(self, fg_color="#212121")
         self.main_container.pack(fill="both", expand=True)
         
-        # ===== LEFT SIDEBAR =====
+        # ---- LEFT SIDEBAR ----
         self.sidebar = ctk.CTkFrame(self.main_container, width=260, fg_color="#171717", corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
@@ -319,7 +317,7 @@ class HasurGateApp(ctk.CTk):
         ctk.CTkLabel(profile_frame, text="tungtungtungsahur", font=ctk.CTkFont(size=13),
                      text_color="#ECECEC").pack(side="left", padx=10)
         
-        # ===== RIGHT COLUMN =====
+        # ---- RIGHT COLUMN ----
         self.main_canvas = ctk.CTkFrame(self.main_container, fg_color="#212121")
         self.main_canvas.pack(side="right", fill="both", expand=True)
         
@@ -330,7 +328,7 @@ class HasurGateApp(ctk.CTk):
                       font=ctk.CTkFont(size=14, weight="bold"), fg_color="transparent",
                       hover_color="#2F2F2F", corner_radius=8, height=40).pack(side="left")
         
-        # ===== CHAT PAGE =====
+        # ---- CHAT PAGE ----
         self.chat_frame = ctk.CTkScrollableFrame(self.main_canvas, fg_color="transparent")
         self.chat_frame.pack(fill="both", expand=True, padx=20, pady=10)
         
@@ -348,7 +346,7 @@ class HasurGateApp(ctk.CTk):
             chip.grid(row=i // 2, column=i % 2, padx=5, pady=5)
             chip.configure(command=lambda txt=s: self.question_entry.insert(0, txt))
         
-        # ===== INPUT BAR =====
+        # ---- INPUT BAR ----
         self.input_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=90)
         self.input_frame.pack(fill="x", padx=20, pady=(0, 10))
         self.input_frame.pack_propagate(False)
@@ -374,9 +372,7 @@ class HasurGateApp(ctk.CTk):
         ctk.CTkLabel(self.input_frame, text="Hasur can make mistakes. Check important info.",
                      font=ctk.CTkFont(size=11), text_color="#9CA3AF").pack(pady=(0, 3))
         
-        # ==========================================================
-        # PAGE: VOICE / CHANTING CHALLENGE
-        # ==========================================================
+        # ---- VOICE CHALLENGE PAGE ----
         self.chant_frame = ctk.CTkFrame(self.main_canvas, fg_color="#0a0a2a")
         self.chant_frame.pack_forget()
         
@@ -395,7 +391,7 @@ class HasurGateApp(ctk.CTk):
                                                   command=self.go_to_dance_page, height=56, width=360,
                                                   font=ctk.CTkFont(size=16, weight="bold"),
                                                   fg_color="#8e44ad", hover_color="#7d3c98")
-        # packed later after chant result
+        # packed later
         
         self.chant_scroll = ctk.CTkScrollableFrame(self.chant_frame, fg_color="transparent")
         self.chant_scroll.pack(fill="both", expand=True)
@@ -441,9 +437,7 @@ class HasurGateApp(ctk.CTk):
                                                     text_color="#00ff00")
         self.chant_instruction_label.pack(pady=4)
         
-        # ==========================================================
-        # PAGE: DANCE / MOVEMENT CHALLENGE
-        # ==========================================================
+        # ---- DANCE CHALLENGE PAGE ----
         self.dance_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1a0a2a")
         self.dance_frame.pack_forget()
         
@@ -489,7 +483,7 @@ class HasurGateApp(ctk.CTk):
                                                     text_color="#00ff00")
         self.dance_instruction_label.pack(pady=4)
         
-        # ===== FAILURE OVERLAY =====
+        # ---- FAILURE OVERLAY ----
         self.failure_overlay = ctk.CTkFrame(self.main_canvas, fg_color="#e94560", corner_radius=0)
         self.failure_overlay.pack_forget()
         self.failure_content = ctk.CTkFrame(self.failure_overlay, fg_color="transparent")
@@ -512,7 +506,7 @@ class HasurGateApp(ctk.CTk):
                                           text_color="#333", justify="left")
         self.receipt_label.pack(padx=12, pady=8)
         
-        # ===== ANSWER FRAME =====
+        # ---- ANSWER FRAME ----
         self.answer_frame = ctk.CTkFrame(self.main_canvas, fg_color="transparent")
         self.answer_frame.pack_forget()
         self.char_image_label = ctk.CTkLabel(self.answer_frame, text="", width=150, height=150)
@@ -531,7 +525,7 @@ class HasurGateApp(ctk.CTk):
                                          font=ctk.CTkFont(size=14, weight="bold"))
         self.restart_btn.pack(pady=20)
         
-        # ===== ANSWER LOADING FRAME =====
+        # ---- ANSWER LOADING FRAME ----
         self.answer_loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121")
         self.answer_loading_frame.pack_forget()
         self.answer_loading_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=22, weight="bold"), text_color="#d4d4d4")
@@ -539,7 +533,7 @@ class HasurGateApp(ctk.CTk):
         self.answer_loading_sub_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=16), text_color="#9CA3AF")
         self.answer_loading_sub_label.pack(pady=(0, 20))
         
-        # ===== STATUS BAR =====
+        # ---- STATUS BAR ----
         self.status_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a2e", height=28)
         self.status_bar.pack(fill="x", side="bottom")
         self.attempt_label = ctk.CTkLabel(self.status_bar, text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}",
@@ -562,33 +556,29 @@ class HasurGateApp(ctk.CTk):
             except Exception as e:
                 print(f"⚠️ Camera error: {e}")
                 self.cap = None
-        
+
         if self.cap is not None and self.cap.isOpened():
             ret, frame = self.cap.read()
             if ret:
                 frame = cv2.flip(frame, 1)
-                
+
+                # Voice decibel overlay
                 if self.is_recording and self.phase == "chant":
                     db = int(min(100, self.live_decibel))
                     cv2.rectangle(frame, (10, 30), (10 + db * 4, 65), (0, 100, 255), -1)
                     cv2.putText(frame, f"{self.live_decibel:.0f} dB", (10, 95),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 100), 2)
-                
+
+                # Dance phase: save frames as JPEG images (reliable)
                 if self.is_recording and self.phase == "dance":
-                    cv2.putText(frame, f"SPINS: {self.realtime_spins}/{self.required_spins}",
-                                (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-                    cv2.putText(frame, f"CLAPS: {self.realtime_claps}/{self.required_claps}",
-                                (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
-                    spin_p = min(1.0, self.realtime_spins / max(1, self.required_spins))
-                    clap_p = min(1.0, self.realtime_claps / max(1, self.required_claps))
-                    cv2.rectangle(frame, (10, 100), (310, 120), (50, 50, 50), -1)
-                    cv2.rectangle(frame, (10, 100), (10 + int(300 * spin_p), 120), (0, 255, 255), -1)
-                    cv2.rectangle(frame, (10, 130), (310, 150), (50, 50, 50), -1)
-                    cv2.rectangle(frame, (10, 130), (10 + int(300 * clap_p), 150), (0, 255, 0), -1)
-                
-                if self.is_recording and self.video_writer is not None:
-                    self.video_writer.write(frame)
-                
+                    # Save every frame (or every 2nd to reduce storage)
+                    if self.frame_counter % 1 == 0:  # save all frames
+                        fname = f"{self.current_frame_folder}/frame_{self.frame_counter:06d}.jpg"
+                        cv2.imwrite(fname, frame)
+                    self.frame_counter += 1
+
+                # Show camera feed on both pages (the label is updated regardless)
+                # We'll update both camera labels if they are visible
                 cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(cv2image)
                 if self.phase == "chant":
@@ -599,7 +589,7 @@ class HasurGateApp(ctk.CTk):
                     ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(640, 360))
                     self.dance_camera_label.configure(image=ctk_img)
                     self.dance_camera_label.image = ctk_img
-        
+
         self.after(30, self.update_camera_loop)
     
     # ==========================================
@@ -744,7 +734,6 @@ class HasurGateApp(ctk.CTk):
             self.after(0, self.go_to_chant_page)
         except Exception as e:
             print(f"⚠️ Challenge API error: {e}")
-            # Fallback to simulated challenge
             self.simulate_challenge()
     
     def simulate_challenge(self):
@@ -870,7 +859,6 @@ class HasurGateApp(ctk.CTk):
             if not os.path.exists(chant_wav):
                 raise Exception("Audio not found.")
             
-            # Read audio and convert to base64 (16kHz)
             sr, audio_array = wavfile.read(chant_wav)
             audio_array = np.asarray(audio_array)
             if audio_array.ndim > 1:
@@ -881,7 +869,7 @@ class HasurGateApp(ctk.CTk):
             else:
                 audio_int16 = audio_array.astype(np.int16)
             
-            # Resample to 16kHz if needed
+            # Resample to 16kHz
             try:
                 from scipy.signal import resample_poly
                 from math import gcd
@@ -897,27 +885,17 @@ class HasurGateApp(ctk.CTk):
             wavfile.write(buf, target_sr, audio_16k)
             audio_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
             
-            # Use direct REST API call to multimodal endpoint
             url = "https://ws-bf3itnzatquc4sa0.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-            headers = {
-                "Authorization": f"Bearer {API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": "qwen3-omni-flash",
                 "input": {
                     "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are a transcription assistant. Always transcribe in English."
-                        },
-                        {
-                            "role": "user",
-                            "content": [
-                                {"audio": f"data:audio/wav;base64,{audio_b64}"},
-                                {"text": "Transcribe exactly what the person said in English."}
-                            ]
-                        }
+                        {"role": "system", "content": "You are a transcription assistant. Always transcribe in English."},
+                        {"role": "user", "content": [
+                            {"audio": f"data:audio/wav;base64,{audio_b64}"},
+                            {"text": "Transcribe exactly what the person said in English."}
+                        ]}
                     ]
                 }
             }
@@ -933,24 +911,16 @@ class HasurGateApp(ctk.CTk):
                         transcription = item["text"]
                         break
                 
-                # ---- Detect brainrot phrases and required chant ----
                 detected_text = transcription.lower()
                 required_phrase = self.required_chant.lower()
-                
-                # Check for required phrase
                 phrase_detected = required_phrase in detected_text or detected_text in required_phrase
                 if not phrase_detected:
-                    # Try alternative spelling (sahur)
                     alt_phrase = required_phrase.replace("hasur", "sahur")
                     phrase_detected = alt_phrase in detected_text or detected_text in alt_phrase
                 
-                # Check for any brainrot phrase
                 brainrot_detected = any(phrase in detected_text for phrase in self.brainrot_phrases)
-                
-                # Pass if either condition is met
                 passed = phrase_detected or brainrot_detected
                 
-                # For the demo, we can also set a threshold if needed
                 result = {
                     "transcription": transcription,
                     "detected_volume": self.required_volume,
@@ -959,14 +929,12 @@ class HasurGateApp(ctk.CTk):
                     "volume_sufficient": True,
                     "passed": passed,
                     "reason": "Phrase detected" if phrase_detected else "Brainrot detected" if brainrot_detected else "Nothing detected",
-                    "loudness_percent": 75  # placeholder
+                    "loudness_percent": 75
                 }
             else:
-                # API error – fallback to simulation
                 print(f"⚠️ API error: {response.text}")
                 raise Exception("API returned non-200")
             
-            # Update UI with result
             self.audio_analysis_result = result
             self.chant_passed = bool(result.get("passed", False))
             self.audio_text = result.get("transcription", "")
@@ -974,7 +942,6 @@ class HasurGateApp(ctk.CTk):
             
         except Exception as e:
             print(f"⚠️ Chant error: {e}")
-            # Fallback: always pass for demo stability
             measured_db = int(getattr(self, "live_decibel", 0))
             fallback = {
                 "passed": True,
@@ -999,8 +966,6 @@ class HasurGateApp(ctk.CTk):
         loudness = result.get("loudness_percent", 0)
         passed = result.get("passed", False)
         icon = "✅" if passed else "❌"
-        
-        # Display brainrot detection info
         brainrot_detected = result.get("brainrot_detected", False)
         extra = " 🧠 Brainrot detected!" if brainrot_detected else ""
         
@@ -1026,7 +991,7 @@ class HasurGateApp(ctk.CTk):
         self.proceed_to_dance_btn.pack(side="left", padx=10, pady=15)
     
     # ==========================================================
-    # SESSION 2: DANCING (Qwen-Vision)
+    # SESSION 2: DANCING (Qwen-Vision) - IMAGE-BASED
     # ==========================================================
     def start_dance_phase(self):
         self.dance_start_btn.configure(state="disabled", text="💃 DANCING...")
@@ -1036,16 +1001,15 @@ class HasurGateApp(ctk.CTk):
     
     def run_dance_recording(self):
         duration = DANCE_DURATION
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         folder = self.get_session_folder()
-        video_file = f"{folder}/dance_raw.mp4"
-        final_file = f"{folder}/dance_final.mp4"
-        audio_file = f"{folder}/dance_audio.wav"
-        self.current_video_filename = video_file
-        self.current_final_filename = final_file
-        self.video_writer = cv2.VideoWriter(video_file, fourcc, 30.0, (800, 500))
+        # Create a subfolder for frames
+        frame_folder = f"{folder}/frames"
+        os.makedirs(frame_folder, exist_ok=True)
+        self.current_frame_folder = frame_folder
+        self.frame_counter = 0
         self.is_recording = True
         
+        # Record audio as well
         samplerate = 44100
         self.audio_data = []
         
@@ -1054,101 +1018,203 @@ class HasurGateApp(ctk.CTk):
         
         stream = sd.InputStream(samplerate=samplerate, channels=1, callback=audio_cb)
         stream.start()
-        self.after(0, lambda: self.dance_countdown(duration, stream, video_file, audio_file, final_file))
+        
+        # Start countdown
+        self.after(0, lambda: self.dance_countdown(duration, stream, frame_folder))
     
-    def dance_countdown(self, time_left, stream, video_file, audio_file, final_file):
+    def dance_countdown(self, time_left, stream, frame_folder):
         if time_left <= 0:
             self.is_recording = False
             stream.stop()
             stream.close()
-            if self.video_writer:
-                self.video_writer.release()
             if self.audio_data:
                 audio_array = np.concatenate(self.audio_data, axis=0)
+                audio_file = f"{os.path.dirname(frame_folder)}/dance_audio.wav"
                 wavfile.write(audio_file, 44100, audio_array)
+                self.current_audio_filename = audio_file
+            
+            # Now we have frame images in frame_folder
+            print(f"📸 Saved {self.frame_counter} frames in {frame_folder}")
             self.dance_countdown_label.configure(text="🔍")
             self.dance_instruction_label.configure(
                 text="⏳ Qwen-Vision is counting your moves...", text_color="#ffd700")
-            threading.Thread(target=self.analyze_dance_thread,
-                             args=(video_file, audio_file, final_file), daemon=True).start()
+            threading.Thread(target=self.analyze_dance_thread, args=(frame_folder,), daemon=True).start()
             return
         self.dance_countdown_label.configure(text=f"💃 {time_left:.1f}s")
-        self.after(100, lambda: self.dance_countdown(time_left - 0.1, stream,
-                                                     video_file, audio_file, final_file))
+        self.after(100, lambda: self.dance_countdown(time_left - 0.1, stream, frame_folder))
     
-    def get_frames_from_video(self, video_path, num_frames=8):
-        cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frames = []
-        if total_frames == 0:
-            cap.release()
-            return frames
-        num_frames = min(num_frames, total_frames)
-        intervals = [int(i * total_frames / num_frames) for i in range(num_frames)]
-        for idx in intervals:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ret, frame = cap.read()
-            if ret:
-                frame = cv2.resize(frame, (512, 512))
+    def get_frames_from_images(self, folder, num_frames=DANCE_FRAMES):
+        """Read frames from saved JPEG images"""
+        images = sorted([f for f in os.listdir(folder) if f.endswith('.jpg')])
+        total = len(images)
+        if total == 0:
+            return []
+        # Sample evenly
+        indices = [int(i * total / num_frames) for i in range(num_frames)]
+        encoded = []
+        for idx in indices:
+            if idx >= total:
+                break
+            img_path = os.path.join(folder, images[idx])
+            frame = cv2.imread(img_path)
+            if frame is not None:
+                frame = cv2.resize(frame, (384, 384))
                 _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-                frames.append(base64.b64encode(buffer).decode('utf-8'))
-        cap.release()
-        return frames
+                encoded.append(base64.b64encode(buffer).decode('utf-8'))
+        return encoded
     
-    def merge_audio_video(self, video_file, audio_file, output_file):
+    def analyze_dance_thread(self, frame_folder):
         try:
-            subprocess.run(["ffmpeg", "-y", "-i", video_file, "-i", audio_file,
-                            "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental",
-                            "-shortest", output_file],
-                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except Exception:
-            return False
-    
-    def analyze_dance_thread(self, video_file, audio_file, final_file):
-        try:
-            self.merge_audio_video(video_file, audio_file, final_file)
-            file_to_analyze = final_file if os.path.exists(final_file) else video_file
-            frames_b64 = self.get_frames_from_video(file_to_analyze, num_frames=8)
+            # Read frames from images
+            frames_b64 = self.get_frames_from_images(frame_folder, num_frames=DANCE_FRAMES)
             if not frames_b64:
-                raise Exception("No frames.")
-            prompt = (
-                f"Analyze these video frames. Required: {self.required_spins} spins, "
-                f"{self.required_claps} claps, finish with '{self.challenge.get('finalMove', 'dab')}'.\n"
-                f"Count spins and claps. Be STRICT.\n\n"
-                f"Return ONLY JSON:\n"
-                f'{{"passed": boolean, "reason": string, "detected_spins": number, '
-                f'"detected_claps": number, "detected_final_move": string, '
-                f'"final_move_correct": boolean}}')
-            messages = [{"role": "user", "content":
-                         [{"type": "text", "text": prompt}] +
-                         [{"type": "image_url",
-                           "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
-                          for img in frames_b64]}]
-            response = client.chat.completions.create(
-                model=VISION_MODEL, messages=messages,
-                response_format={"type": "json_object"}, temperature=0.3)
-            result = json.loads(response.choices[0].message.content)
+                raise Exception("No frames extracted from images.")
+            
+            # Try Qwen-Vision
+            required_spins = self.required_spins
+            required_claps = self.required_claps
+            final_move = self.challenge.get('finalMove', 'dab')
+            
+            prompt = f"""
+            You are a motion‑analysis expert. You are given {len(frames_b64)} sequential frames from a video.
+            
+            The person was asked to:
+            - Spin **exactly {required_spins} times** – a full 360° rotation of the body.
+            - Clap **exactly {required_claps} times** – both hands touching (palms together).
+            - Finish with a **'{final_move}'** pose.
+            
+            **How to count claps (touches):**
+            - A clap is when both hands touch each other (no gap).
+            - Look for frames where hands are in contact.
+            - Count each separate touching event (touch, separate, touch again = 2).
+            
+            **How to count spins:**
+            - A spin is a full rotation. Track shoulders and head orientation.
+            - Count only complete 360° rotations.
+            
+            **Instructions:**
+            - Scan frames in order.
+            - If no motion, return 0 for both.
+            - Provide the counts and brief reasoning.
+            
+            Return ONLY valid JSON:
+            {{
+                "detected_spins": integer,
+                "detected_claps": integer,
+                "detected_final_move": string,
+                "confidence": "high" | "medium" | "low",
+                "reasoning": "brief explanation"
+            }}
+            """
+            
+            messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+            for img in frames_b64:
+                messages[0]["content"].append({"type": "image_url", "image_url": f"data:image/jpeg;base64,{img}"})
+            
+            vision_models = ["qwen-vl-max", "qwen-vl-plus", "qwen-vl"]
+            result = None
+            for model in vision_models:
+                try:
+                    print(f"📡 Trying model: {model}...")
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        response_format={"type": "json_object"},
+                        temperature=0.0,
+                        max_tokens=200,
+                        timeout=30
+                    )
+                    result = json.loads(response.choices[0].message.content)
+                    print(f"✅ Success with {model}: {result}")
+                    break
+                except Exception as e:
+                    print(f"⚠️ Model {model} failed: {e}")
+                    continue
+            
+            if result is None:
+                # Fallback: simple motion detection using images
+                print("🔄 Falling back to local motion detection.")
+                images = sorted([f for f in os.listdir(frame_folder) if f.endswith('.jpg')])
+                frames = [cv2.imread(os.path.join(frame_folder, img)) for img in images if cv2.imread(os.path.join(frame_folder, img)) is not None]
+                if len(frames) < 2:
+                    raise Exception("Not enough frames for motion detection.")
+                prev = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
+                motion_sum = 0
+                for i in range(1, len(frames)):
+                    curr = cv2.cvtColor(frames[i], cv2.COLOR_BGR2GRAY)
+                    diff = cv2.absdiff(prev, curr)
+                    non_zero = np.count_nonzero(diff > 30)
+                    if non_zero > 10000:
+                        motion_sum += 1
+                    prev = curr
+                if motion_sum > 5:
+                    detected_spins = min(required_spins, 2)
+                    detected_claps = min(required_claps, 2)
+                    result = {
+                        "detected_spins": detected_spins,
+                        "detected_claps": detected_claps,
+                        "detected_final_move": "dab",
+                        "confidence": "low",
+                        "reasoning": "Fallback motion detection"
+                    }
+                else:
+                    result = {
+                        "detected_spins": 0,
+                        "detected_claps": 0,
+                        "detected_final_move": "none",
+                        "confidence": "low",
+                        "reasoning": "No motion detected"
+                    }
+                self.vision_analysis_result = result
+                detected_spins = result.get("detected_spins", 0)
+                detected_claps = result.get("detected_claps", 0)
+                self.realtime_spins = detected_spins
+                self.realtime_claps = detected_claps
+                self.dance_passed = (detected_spins >= self.required_spins and detected_claps >= self.required_claps)
+                self.after(0, lambda: self.show_dance_result(result))
+                # Clean up frame folder (optional)
+                import shutil
+                shutil.rmtree(frame_folder)
+                return
+            
+            # Process Qwen result
             self.vision_analysis_result = result
-            self.dance_passed = result.get("passed", False)
-            self.realtime_spins = result.get("detected_spins", 0)
-            self.realtime_claps = result.get("detected_claps", 0)
+            detected_spins = result.get("detected_spins", 0)
+            detected_claps = result.get("detected_claps", 0)
+            self.realtime_spins = detected_spins
+            self.realtime_claps = detected_claps
+            self.dance_passed = (detected_spins >= self.required_spins and detected_claps >= self.required_claps)
             self.after(0, lambda: self.show_dance_result(result))
+            
         except Exception as e:
             print(f"⚠️ Dance error: {e}")
-            fallback = {"passed": False, "reason": f"Vision error: {e}",
-                        "detected_spins": 0, "detected_claps": 0,
-                        "detected_final_move": "none", "final_move_correct": False}
+            fallback = {
+                "passed": False,
+                "reason": f"Error: {e}",
+                "detected_spins": 0,
+                "detected_claps": 0,
+                "detected_final_move": "none",
+                "final_move_correct": False,
+                "confidence": "low",
+                "reasoning": str(e)
+            }
             self.vision_analysis_result = fallback
             self.dance_passed = False
             self.after(0, lambda: self.show_dance_result(fallback))
+        finally:
+            # Clean up frame folder (optional)
+            import shutil
+            try:
+                shutil.rmtree(frame_folder)
+            except:
+                pass
     
     def show_dance_result(self, result):
         self.dance_countdown_label.configure(text="")
         det_s = result.get("detected_spins", 0)
         det_c = result.get("detected_claps", 0)
         det_move = result.get("detected_final_move", "?")
-        passed = result.get("passed", False)
+        passed = self.dance_passed
         s_icon = "✅" if det_s >= self.required_spins else "❌"
         c_icon = "✅" if det_c >= self.required_claps else "❌"
         m_icon = "✅" if result.get("final_move_correct", False) else "❌"
@@ -1260,11 +1326,9 @@ class HasurGateApp(ctk.CTk):
         self.answer_loading_frame.pack(fill="both", expand=True)
         self.answer_loading_frame.lift()
         
-        # Animated dots
         self.answer_loading_dots = 0
         self.animate_answer_dots()
         
-        # Rotating phrases
         question_preview = self.question[:20]
         answer_phrases = [
             f"💬 Formulating a brainrot response to '{question_preview}'...",
