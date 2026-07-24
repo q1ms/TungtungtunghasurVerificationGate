@@ -19,6 +19,7 @@ import tkinter
 import io
 from openai import OpenAI
 import requests
+import shutil
 
 # ==========================================
 # >>> YOUR API CONFIGURATION <<<
@@ -43,8 +44,9 @@ MAX_ATTEMPTS = 5
 CHANT_DURATION = 6.0
 DANCE_DURATION = 8.0
 BACKGROUND_MUSIC = "assets/background.mp3"
-DANCE_FRAMES = 16                 # number of frames to sample
+DANCE_FRAMES = 16
 
+# Characters (keep, but we'll use grayscale theme)
 CHARACTERS = [
     {"name": "Goblin of Confusion", "img": "assets/char1.png", "audio": "assets/char1.mp3"},
     {"name": "Specter of Nonsense", "img": "assets/char2.png", "audio": "assets/char2.mp3"},
@@ -84,29 +86,29 @@ class HasurGateApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # --- SPLASH SCREEN ---
+        # --- Splash Screen (gray theme) ---
         self.title("Loading...")
         self.geometry("1200x800")
         self.state('zoomed')
-        self.splash_frame = ctk.CTkFrame(self, fg_color="#212121")
+        self.splash_frame = ctk.CTkFrame(self, fg_color="#1a1a1a")
         self.splash_frame.pack(fill="both", expand=True)
         
-        self.splash_label = ctk.CTkLabel(self.splash_frame, text="⏳ Booting up Hasur", font=ctk.CTkFont(size=28, weight="bold"), text_color="#d4d4d4")
+        self.splash_label = ctk.CTkLabel(self.splash_frame, text="⏳ Booting up Hasur", font=ctk.CTkFont(size=28, weight="bold"), text_color="#b0b0b0")
         self.splash_label.pack(expand=True, pady=(0, 10))
-        self.splash_sub_label = ctk.CTkLabel(self.splash_frame, text="", font=ctk.CTkFont(size=18), text_color="#9CA3AF")
+        self.splash_sub_label = ctk.CTkLabel(self.splash_frame, text="", font=ctk.CTkFont(size=18), text_color="#6a6a6a")
         self.splash_sub_label.pack(pady=5)
         
         self.splash_dots = 0
         self.animate_splash_dots()
         
         boot_phrases = [
-            "⚡ Powering up the brainrot engine...",
-            "🔄 Summoning Hasur's spirit...",
-            "🔮 Loading chaos protocols...",
-            "🔥 Igniting the Tung Tung Tung...",
-            "🌀 Twisting reality...",
-            "💀 Preparing your humiliation...",
-            "🎭 Setting the stage for failure...",
+            "Loading brainrot engine...",
+            "Summoning Hasur's spirit...",
+            "Loading chaos protocols...",
+            "Igniting the Tung Tung Tung...",
+            "Twisting reality...",
+            "Preparing your humiliation...",
+            "Setting the stage for failure...",
         ]
         random.shuffle(boot_phrases)
         self.splash_phrases = boot_phrases
@@ -164,9 +166,7 @@ class HasurGateApp(ctk.CTk):
         self.state('zoomed')
         self.bind("<Escape>", lambda e: self.on_escape())
         
-        # ==========================================
-        # STATE VARIABLES
-        # ==========================================
+        # --- State variables ---
         self.attempt = 1
         self.question = ""
         self.challenge = {}
@@ -188,6 +188,7 @@ class HasurGateApp(ctk.CTk):
         self.audio_text = ""
         self.audio_loudness = 0
         self.live_decibel = 0.0
+        self.actual_loudness_percent = 0   # for real dB
         
         self.required_spins = 0
         self.required_claps = 0
@@ -196,13 +197,12 @@ class HasurGateApp(ctk.CTk):
         self.chant_passed = False
         self.dance_passed = False
         
-        self.current_frame_folder = ""     # folder where dance frames are saved
+        self.current_frame_folder = ""
         self.current_audio_filename = ""
         self.current_audio_process = None
         self.background_music_process = None
         self.audio_stream = None
         
-        # Brainrot phrases to detect
         self.brainrot_phrases = [
             "skibidi", "sigma", "gyatt", "fanum tax", "mewing", "ohio",
             "tung tung tung hasur", "sahur", "brainrot", "rizz", "sus", "no cap", "bet"
@@ -214,10 +214,9 @@ class HasurGateApp(ctk.CTk):
         
         self.initialized = True
         print("🟢 App initialized successfully!", flush=True)
-        print("🟢 Separate Voice and Dance challenges with Qwen.", flush=True)
     
     # ==========================================
-    # WINDOW LIFECYCLE
+    # LIFECYCLE & PROCESS KILLERS
     # ==========================================
     def on_escape(self):
         self.stop_audio()
@@ -237,9 +236,6 @@ class HasurGateApp(ctk.CTk):
                     pass
         super().destroy()
     
-    # ==========================================
-    # PROCESS KILLERS
-    # ==========================================
     def _kill_proc(self, proc):
         if proc is None:
             return
@@ -276,57 +272,59 @@ class HasurGateApp(ctk.CTk):
         self.background_music_process = None
     
     # ==========================================
-    # UI SETUP - ChatGPT grey theme
+    # UI SETUP - Gray/Black Theme
     # ==========================================
     def setup_ui(self):
+        # Main container - dark gray
         self.main_container = ctk.CTkFrame(self, fg_color="#212121")
         self.main_container.pack(fill="both", expand=True)
         
         # ---- LEFT SIDEBAR ----
-        self.sidebar = ctk.CTkFrame(self.main_container, width=260, fg_color="#171717", corner_radius=0)
+        self.sidebar = ctk.CTkFrame(self.main_container, width=260, fg_color="#2a2a2a", corner_radius=0)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
         
         sidebar_inner = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         sidebar_inner.pack(fill="both", expand=True, padx=12, pady=12)
         
+        # New Chat button - gray
         self.new_chat_btn = ctk.CTkButton(sidebar_inner, text="+ New Chat",
                                           font=ctk.CTkFont(size=14, weight="bold"),
-                                          fg_color="#2F2F2F", hover_color="#3F3F3F",
+                                          fg_color="#3a3a3a", hover_color="#4a4a4a",
                                           corner_radius=8, height=40, command=self.restart_app)
         self.new_chat_btn.pack(fill="x", pady=(0, 20))
         
         self.model_btn = ctk.CTkButton(sidebar_inner, text="⚡ Hasur-4B (Brainrot)",
-                                       font=ctk.CTkFont(size=13), fg_color="#2F2F2F",
-                                       hover_color="#3F3F3F", corner_radius=8, height=35, anchor="w")
+                                       font=ctk.CTkFont(size=13), fg_color="#3a3a3a",
+                                       hover_color="#4a4a4a", corner_radius=8, height=35, anchor="w")
         self.model_btn.pack(fill="x", pady=(0, 20))
         
         ctk.CTkLabel(sidebar_inner, text="Today", font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color="#9CA3AF").pack(anchor="w", pady=(10, 5))
+                     text_color="#6a6a6a").pack(anchor="w", pady=(10, 5))
         for item in ["What is the meaning of life?", "Tell me a joke", "Tung Tung Tung Hasur"]:
             ctk.CTkButton(sidebar_inner, text=item, font=ctk.CTkFont(size=13),
-                          fg_color="transparent", hover_color="#2F2F2F",
-                          corner_radius=8, height=30, anchor="w").pack(fill="x", pady=1)
+                          fg_color="transparent", hover_color="#3a3a3a",
+                          corner_radius=8, height=30, anchor="w", text_color="#b0b0b0").pack(fill="x", pady=1)
         
         ctk.CTkFrame(sidebar_inner, fg_color="transparent").pack(fill="both", expand=True)
         
         profile_frame = ctk.CTkFrame(sidebar_inner, fg_color="transparent")
         profile_frame.pack(fill="x")
-        ctk.CTkLabel(profile_frame, text="👤", font=ctk.CTkFont(size=20), fg_color="#2F2F2F",
+        ctk.CTkLabel(profile_frame, text="👤", font=ctk.CTkFont(size=20), fg_color="#3a3a3a",
                      corner_radius=16, width=32, height=32).pack(side="left", padx=5)
         ctk.CTkLabel(profile_frame, text="tungtungtungsahur", font=ctk.CTkFont(size=13),
-                     text_color="#ECECEC").pack(side="left", padx=10)
+                     text_color="#b0b0b0").pack(side="left", padx=10)
         
         # ---- RIGHT COLUMN ----
-        self.main_canvas = ctk.CTkFrame(self.main_container, fg_color="#212121")
+        self.main_canvas = ctk.CTkFrame(self.main_container, fg_color="#1e1e1e")
         self.main_canvas.pack(side="right", fill="both", expand=True)
         
-        self.nav_bar = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=50)
+        self.nav_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e", height=50)
         self.nav_bar.pack(fill="x", padx=20, pady=(10, 0))
         self.nav_bar.pack_propagate(False)
         ctk.CTkButton(self.nav_bar, text="▼ Hasur-4B (Brainrot)",
                       font=ctk.CTkFont(size=14, weight="bold"), fg_color="transparent",
-                      hover_color="#2F2F2F", corner_radius=8, height=40).pack(side="left")
+                      hover_color="#2a2a2a", corner_radius=8, height=40, text_color="#b0b0b0").pack(side="left")
         
         # ---- CHAT PAGE ----
         self.chat_frame = ctk.CTkScrollableFrame(self.main_canvas, fg_color="transparent")
@@ -335,23 +333,23 @@ class HasurGateApp(ctk.CTk):
         welcome_frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         welcome_frame.pack(fill="both", expand=True)
         ctk.CTkLabel(welcome_frame, text="What can I help with?",
-                     font=ctk.CTkFont(size=28, weight="bold"), text_color="#ECECEC").pack(pady=(120, 20))
+                     font=ctk.CTkFont(size=28, weight="bold"), text_color="#d0d0d0").pack(pady=(120, 20))
         
         chips_frame = ctk.CTkFrame(welcome_frame, fg_color="transparent")
         chips_frame.pack()
         for i, s in enumerate(["Ask me anything...", "Brainrot joke", "Tell me about AI", "Write a poem"]):
             chip = ctk.CTkButton(chips_frame, text=s, font=ctk.CTkFont(size=13),
-                                 fg_color="#2F2F2F", hover_color="#3F3F3F", corner_radius=20,
-                                 height=35, border_width=1, border_color="#3F3F3F")
+                                 fg_color="#2a2a2a", hover_color="#3a3a3a", corner_radius=20,
+                                 height=35, border_width=1, border_color="#3a3a3a", text_color="#b0b0b0")
             chip.grid(row=i // 2, column=i % 2, padx=5, pady=5)
             chip.configure(command=lambda txt=s: self.question_entry.insert(0, txt))
         
         # ---- INPUT BAR ----
-        self.input_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=90)
+        self.input_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e", height=90)
         self.input_frame.pack(fill="x", padx=20, pady=(0, 10))
         self.input_frame.pack_propagate(False)
         
-        input_container = ctk.CTkFrame(self.input_frame, fg_color="#2F2F2F", corner_radius=24, height=52)
+        input_container = ctk.CTkFrame(self.input_frame, fg_color="#2a2a2a", corner_radius=24, height=52)
         input_container.pack(fill="x", padx=20, pady=8)
         input_container.pack_propagate(False)
         
@@ -360,150 +358,148 @@ class HasurGateApp(ctk.CTk):
         
         self.question_entry = ctk.CTkEntry(input_row, placeholder_text="Message Hasur...",
                                            font=ctk.CTkFont(size=16), fg_color="transparent",
-                                           border_width=0, height=38)
+                                           border_width=0, height=38, text_color="#d0d0d0")
         self.question_entry.pack(side="left", fill="x", expand=True)
         self.question_entry.bind("<Return>", lambda e: self.start_ritual())
         
         self.send_btn = ctk.CTkButton(input_row, text="↑", font=ctk.CTkFont(size=18, weight="bold"),
-                                      fg_color="#4A4A4A", hover_color="#6B6B6B", corner_radius=20,
-                                      width=32, height=32, command=self.start_ritual)
+                                      fg_color="#3a3a3a", hover_color="#4a4a4a", corner_radius=20,
+                                      width=32, height=32, command=self.start_ritual, text_color="#d0d0d0")
         self.send_btn.pack(side="right")
         
         ctk.CTkLabel(self.input_frame, text="Hasur can make mistakes. Check important info.",
-                     font=ctk.CTkFont(size=11), text_color="#9CA3AF").pack(pady=(0, 3))
+                     font=ctk.CTkFont(size=11), text_color="#6a6a6a").pack(pady=(0, 3))
         
         # ---- VOICE CHALLENGE PAGE ----
-        self.chant_frame = ctk.CTkFrame(self.main_canvas, fg_color="#0a0a2a")
+        self.chant_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a1a")
         self.chant_frame.pack_forget()
         
-        self.chant_action_bar = ctk.CTkFrame(self.chant_frame, fg_color="#0d0d38", height=86)
+        self.chant_action_bar = ctk.CTkFrame(self.chant_frame, fg_color="#1a1a1a", height=86)
         self.chant_action_bar.pack(side="bottom", fill="x")
         self.chant_action_bar.pack_propagate(False)
         
         self.chant_start_btn = ctk.CTkButton(self.chant_action_bar, text="🎤 START CHANTING",
                                              command=self.start_chant_phase, height=56, width=300,
                                              font=ctk.CTkFont(size=18, weight="bold"),
-                                             fg_color="#2980b9", hover_color="#2471a3")
+                                             fg_color="#3a3a3a", hover_color="#4a4a4a", text_color="#d0d0d0")
         self.chant_start_btn.pack(side="left", padx=20, pady=15)
         
         self.proceed_to_dance_btn = ctk.CTkButton(self.chant_action_bar,
                                                   text="💃 PROCEED TO DANCE CHALLENGE →",
                                                   command=self.go_to_dance_page, height=56, width=360,
                                                   font=ctk.CTkFont(size=16, weight="bold"),
-                                                  fg_color="#8e44ad", hover_color="#7d3c98")
+                                                  fg_color="#3a3a3a", hover_color="#4a4a4a", text_color="#d0d0d0")
         # packed later
         
         self.chant_scroll = ctk.CTkScrollableFrame(self.chant_frame, fg_color="transparent")
         self.chant_scroll.pack(fill="both", expand=True)
         
         ctk.CTkLabel(self.chant_scroll, text="🎤 SESSION 1/2 — VOICE CHALLENGE",
-                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#00aaff").pack(pady=(18, 2))
+                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#b0b0b0").pack(pady=(18, 2))
         ctk.CTkLabel(self.chant_scroll, text="🗣️ CHANTING SECTION · Qwen-Audio is listening to your voice",
-                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#7fd4ff").pack(pady=(0, 6))
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#6a6a6a").pack(pady=(0, 6))
         
         self.chant_challenge_label = ctk.CTkLabel(self.chant_scroll, text="",
                                                   font=ctk.CTkFont(size=17, weight="bold"),
-                                                  text_color="#ffd700", wraplength=900, justify="center")
+                                                  text_color="#b0b0b0", wraplength=900, justify="center")
         self.chant_challenge_label.pack(pady=8)
         
         self.chant_camera_label = ctk.CTkLabel(self.chant_scroll, text="", width=560, height=315,
-                                               fg_color="black", corner_radius=10)
+                                               fg_color="#0a0a0a", corner_radius=10)
         self.chant_camera_label.pack(pady=8)
         
         self.chant_decibel_frame = ctk.CTkFrame(self.chant_scroll, fg_color="transparent")
         self.chant_decibel_frame.pack(pady=6)
         ctk.CTkLabel(self.chant_decibel_frame, text="🔊 VOLUME:",
-                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#4ade80").pack(side="left", padx=5)
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#b0b0b0").pack(side="left", padx=5)
         self.chant_decibel_bar = ctk.CTkProgressBar(self.chant_decibel_frame, width=420, height=22,
-                                                    fg_color="#333", progress_color="#e94560")
+                                                    fg_color="#333", progress_color="#666")
         self.chant_decibel_bar.pack(side="left", padx=8)
         self.chant_decibel_bar.set(0)
         self.chant_db_label = ctk.CTkLabel(self.chant_decibel_frame, text="0 dB",
-                                           font=ctk.CTkFont(size=15, weight="bold"), text_color="#4ade80")
+                                           font=ctk.CTkFont(size=15, weight="bold"), text_color="#b0b0b0")
         self.chant_db_label.pack(side="left", padx=5)
         
         self.chant_heard_label = ctk.CTkLabel(self.chant_scroll, text="🎤 Heard: Waiting...",
-                                              font=ctk.CTkFont(size=15), text_color="#aaa",
+                                              font=ctk.CTkFont(size=15), text_color="#6a6a6a",
                                               wraplength=800, justify="center")
         self.chant_heard_label.pack(pady=4)
         
         self.chant_countdown_label = ctk.CTkLabel(self.chant_scroll, text="",
                                                   font=ctk.CTkFont(size=46, weight="bold"),
-                                                  text_color="#e94560")
+                                                  text_color="#888")
         self.chant_countdown_label.pack(pady=2)
         
         self.chant_instruction_label = ctk.CTkLabel(self.chant_scroll, text="",
                                                     font=ctk.CTkFont(size=16, weight="bold"),
-                                                    text_color="#00ff00")
+                                                    text_color="#888")
         self.chant_instruction_label.pack(pady=4)
         
         # ---- DANCE CHALLENGE PAGE ----
-        self.dance_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1a0a2a")
+        self.dance_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a1a")
         self.dance_frame.pack_forget()
         
-        self.dance_action_bar = ctk.CTkFrame(self.dance_frame, fg_color="#220d38", height=86)
+        self.dance_action_bar = ctk.CTkFrame(self.dance_frame, fg_color="#1a1a1a", height=86)
         self.dance_action_bar.pack(side="bottom", fill="x")
         self.dance_action_bar.pack_propagate(False)
         
         self.dance_start_btn = ctk.CTkButton(self.dance_action_bar, text="💃 START DANCING",
                                              command=self.start_dance_phase, height=56, width=300,
                                              font=ctk.CTkFont(size=18, weight="bold"),
-                                             fg_color="#8e44ad", hover_color="#7d3c98")
+                                             fg_color="#3a3a3a", hover_color="#4a4a4a", text_color="#d0d0d0")
         self.dance_start_btn.pack(padx=20, pady=15)
         
         self.dance_scroll = ctk.CTkScrollableFrame(self.dance_frame, fg_color="transparent")
         self.dance_scroll.pack(fill="both", expand=True)
         
         ctk.CTkLabel(self.dance_scroll, text="💃 SESSION 2/2 — DANCE CHALLENGE",
-                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#ff66ff").pack(pady=(18, 2))
+                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#b0b0b0").pack(pady=(18, 2))
         ctk.CTkLabel(self.dance_scroll, text="🕺 MOVEMENT SECTION · Qwen-Vision is watching your moves",
-                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#ffb3ff").pack(pady=(0, 6))
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#6a6a6a").pack(pady=(0, 6))
         
+        # Challenge label (top) – only this remains
         self.dance_challenge_label = ctk.CTkLabel(self.dance_scroll, text="",
                                                   font=ctk.CTkFont(size=17, weight="bold"),
-                                                  text_color="#ffd700", wraplength=900, justify="center")
+                                                  text_color="#b0b0b0", wraplength=900, justify="center")
         self.dance_challenge_label.pack(pady=8)
         
         self.dance_camera_label = ctk.CTkLabel(self.dance_scroll, text="", width=640, height=360,
-                                               fg_color="black", corner_radius=10)
+                                               fg_color="#0a0a0a", corner_radius=10)
         self.dance_camera_label.pack(pady=8)
         
-        self.dance_progress_label = ctk.CTkLabel(self.dance_scroll, text="🔄 SPINS: 0/0 | 👏 CLAPS: 0/0",
-                                                 font=ctk.CTkFont(size=20, weight="bold"),
-                                                 text_color="#00ffff")
-        self.dance_progress_label.pack(pady=6)
+        # REMOVED dance_progress_label (SPINS/CLAPS counts) – per user request
         
         self.dance_countdown_label = ctk.CTkLabel(self.dance_scroll, text="",
                                                   font=ctk.CTkFont(size=46, weight="bold"),
-                                                  text_color="#e94560")
+                                                  text_color="#888")
         self.dance_countdown_label.pack(pady=2)
         
         self.dance_instruction_label = ctk.CTkLabel(self.dance_scroll, text="",
                                                     font=ctk.CTkFont(size=16, weight="bold"),
-                                                    text_color="#00ff00")
+                                                    text_color="#888")
         self.dance_instruction_label.pack(pady=4)
         
         # ---- FAILURE OVERLAY ----
-        self.failure_overlay = ctk.CTkFrame(self.main_canvas, fg_color="#e94560", corner_radius=0)
+        self.failure_overlay = ctk.CTkFrame(self.main_canvas, fg_color="#3a3a3a", corner_radius=0)
         self.failure_overlay.pack_forget()
         self.failure_content = ctk.CTkFrame(self.failure_overlay, fg_color="transparent")
         self.failure_content.place(relx=0.5, rely=0.5, anchor="center")
         ctk.CTkLabel(self.failure_content, text="💀 RITUAL FAILED 💀",
-                     font=ctk.CTkFont(size=48, weight="bold"), text_color="white").pack(pady=(0, 15))
+                     font=ctk.CTkFont(size=48, weight="bold"), text_color="#d0d0d0").pack(pady=(0, 15))
         self.failure_reason_label = ctk.CTkLabel(self.failure_content, text="",
-                                                 font=ctk.CTkFont(size=20), text_color="white",
+                                                 font=ctk.CTkFont(size=20), text_color="#b0b0b0",
                                                  wraplength=800, justify="center")
         self.failure_reason_label.pack()
         self.brainrot_label = ctk.CTkLabel(self.failure_content, text="",
-                                           font=ctk.CTkFont(size=26, weight="bold"), text_color="#ffd700")
+                                           font=ctk.CTkFont(size=26, weight="bold"), text_color="#888")
         self.brainrot_label.pack(pady=15)
         
-        self.receipt_frame = ctk.CTkFrame(self.failure_overlay, fg_color="#f5f5dc",
-                                          border_width=3, border_color="#333", corner_radius=5)
+        self.receipt_frame = ctk.CTkFrame(self.failure_overlay, fg_color="#2a2a2a",
+                                          border_width=2, border_color="#4a4a4a", corner_radius=5)
         self.receipt_frame.place(relx=0.85, rely=0.5, anchor="center")
         self.receipt_label = ctk.CTkLabel(self.receipt_frame, text="",
                                           font=ctk.CTkFont(family="Courier", size=10),
-                                          text_color="#333", justify="left")
+                                          text_color="#b0b0b0", justify="left")
         self.receipt_label.pack(padx=12, pady=8)
         
         # ---- ANSWER FRAME ----
@@ -511,37 +507,34 @@ class HasurGateApp(ctk.CTk):
         self.answer_frame.pack_forget()
         self.char_image_label = ctk.CTkLabel(self.answer_frame, text="", width=150, height=150)
         self.char_image_label.pack(side="left", padx=40)
-        self.dialogue_box = ctk.CTkFrame(self.answer_frame, fg_color="white", corner_radius=15,
-                                         border_width=3, border_color="#e94560")
+        self.dialogue_box = ctk.CTkFrame(self.answer_frame, fg_color="#2a2a2a", corner_radius=15,
+                                         border_width=2, border_color="#4a4a4a")
         self.dialogue_box.pack(side="left", fill="both", expand=True, padx=40, pady=40)
         self.char_name_label = ctk.CTkLabel(self.dialogue_box, text="",
-                                            font=ctk.CTkFont(size=18, weight="bold"), text_color="#e94560")
+                                            font=ctk.CTkFont(size=18, weight="bold"), text_color="#b0b0b0")
         self.char_name_label.pack(pady=(15, 5))
         self.answer_text_label = ctk.CTkLabel(self.dialogue_box, text="", font=ctk.CTkFont(size=18),
-                                              text_color="black", wraplength=500, justify="left")
+                                              text_color="#d0d0d0", wraplength=500, justify="left")
         self.answer_text_label.pack(pady=15, padx=15)
         self.restart_btn = ctk.CTkButton(self.answer_frame, text="🔄 SUFFER AGAIN", command=self.restart_app,
-                                         fg_color="#333", hover_color="#555", height=40, width=180,
-                                         font=ctk.CTkFont(size=14, weight="bold"))
+                                         fg_color="#3a3a3a", hover_color="#4a4a4a", height=40, width=180,
+                                         font=ctk.CTkFont(size=14, weight="bold"), text_color="#d0d0d0")
         self.restart_btn.pack(pady=20)
         
         # ---- ANSWER LOADING FRAME ----
-        self.answer_loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121")
+        self.answer_loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e")
         self.answer_loading_frame.pack_forget()
-        self.answer_loading_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=22, weight="bold"), text_color="#d4d4d4")
-        self.answer_loading_label.pack(expand=True, pady=(100, 10))
-        self.answer_loading_sub_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=16), text_color="#9CA3AF")
-        self.answer_loading_sub_label.pack(pady=(0, 20))
+        # This will be shown during answer generation with ChatGPT-style thinking
         
-        # ---- STATUS BAR ----
-        self.status_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a2e", height=28)
+        # ---- STATUS BAR (gray, minimal) ----
+        self.status_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a1a", height=28)
         self.status_bar.pack(fill="x", side="bottom")
         self.attempt_label = ctk.CTkLabel(self.status_bar, text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}",
-                                          font=ctk.CTkFont(size=12), text_color="#888")
+                                          font=ctk.CTkFont(size=12), text_color="#6a6a6a")
         self.attempt_label.pack(side="left", padx=15)
         self.failure_counter_label = ctk.CTkLabel(self.status_bar, text="❌ Failures: 0",
                                                   font=ctk.CTkFont(size=12, weight="bold"),
-                                                  text_color="#e94560")
+                                                  text_color="#888")
         self.failure_counter_label.pack(side="right", padx=15)
     
     # ==========================================
@@ -565,20 +558,18 @@ class HasurGateApp(ctk.CTk):
                 # Voice decibel overlay
                 if self.is_recording and self.phase == "chant":
                     db = int(min(100, self.live_decibel))
-                    cv2.rectangle(frame, (10, 30), (10 + db * 4, 65), (0, 100, 255), -1)
+                    cv2.rectangle(frame, (10, 30), (10 + db * 4, 65), (100, 100, 100), -1)
                     cv2.putText(frame, f"{self.live_decibel:.0f} dB", (10, 95),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 100), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
 
-                # Dance phase: save frames as JPEG images (reliable)
+                # Dance phase: save frames as JPEG
                 if self.is_recording and self.phase == "dance":
-                    # Save every frame (or every 2nd to reduce storage)
-                    if self.frame_counter % 1 == 0:  # save all frames
+                    if self.frame_counter % 1 == 0:
                         fname = f"{self.current_frame_folder}/frame_{self.frame_counter:06d}.jpg"
                         cv2.imwrite(fname, frame)
                     self.frame_counter += 1
 
-                # Show camera feed on both pages (the label is updated regardless)
-                # We'll update both camera labels if they are visible
+                # Update camera labels
                 cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(cv2image)
                 if self.phase == "chant":
@@ -684,7 +675,69 @@ class HasurGateApp(ctk.CTk):
         self.stop_background_music()
         self.title("🔥 HASUR BRAINROT MODE 🔥")
         self.send_btn.configure(state="disabled")
+        
+        # Show loading indicator with ChatGPT-style message
+        self.loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e")
+        self.loading_frame.pack(fill="both", expand=True)
+        
+        # ChatGPT-style thinking indicator
+        self.loading_icon_label = ctk.CTkLabel(self.loading_frame, text="⚪", font=ctk.CTkFont(size=30), text_color="#6a6a6a")
+        self.loading_icon_label.pack(pady=(100, 10))
+        self.loading_text_label = ctk.CTkLabel(self.loading_frame, text="Thinking...", font=ctk.CTkFont(size=22, weight="bold"), text_color="#b0b0b0")
+        self.loading_text_label.pack(pady=5)
+        self.loading_sub_label = ctk.CTkLabel(self.loading_frame, text="", font=ctk.CTkFont(size=16), text_color="#6a6a6a")
+        self.loading_sub_label.pack(pady=5)
+        # Three-dot animation will be started
+        self.loading_dots = 0
+        self.animate_loading_dots()
+        # Rotating phrases
+        self.loading_phrases = [
+            "Refining your challenge...",
+            "Hasur is pondering...",
+            "Generating chaos...",
+            "Twisting the question...",
+            "Preparing the ritual..."
+        ]
+        random.shuffle(self.loading_phrases)
+        self.loading_phrase_index = 0
+        self.update_loading_phrases()
+        
         threading.Thread(target=self.generate_challenge_thread, daemon=True).start()
+    
+    def animate_loading_dots(self):
+        if hasattr(self, 'loading_frame') and self.loading_frame is not None:
+            try:
+                if self.loading_frame.winfo_exists():
+                    dots = "." * (self.loading_dots % 4)
+                    self.loading_text_label.configure(text=f"Thinking{dots}")
+                    self.loading_dots += 1
+                    self.after(500, self.animate_loading_dots)
+                else:
+                    return
+            except tkinter.TclError:
+                return
+        else:
+            return
+    
+    def update_loading_phrases(self):
+        if hasattr(self, 'loading_frame') and self.loading_frame is not None:
+            try:
+                if self.loading_frame.winfo_exists():
+                    if self.loading_phrase_index < len(self.loading_phrases):
+                        phrase = self.loading_phrases[self.loading_phrase_index]
+                        self.loading_sub_label.configure(text=phrase)
+                        self.loading_phrase_index += 1
+                        self.after(1200, self.update_loading_phrases)
+                    else:
+                        random.shuffle(self.loading_phrases)
+                        self.loading_phrase_index = 0
+                        self.after(1200, self.update_loading_phrases)
+                else:
+                    return
+            except tkinter.TclError:
+                return
+        else:
+            return
     
     def generate_challenge_thread(self):
         try:
@@ -735,6 +788,14 @@ class HasurGateApp(ctk.CTk):
         except Exception as e:
             print(f"⚠️ Challenge API error: {e}")
             self.simulate_challenge()
+        finally:
+            # Hide loading frame
+            if hasattr(self, 'loading_frame') and self.loading_frame is not None:
+                try:
+                    self.loading_frame.destroy()
+                except:
+                    pass
+                self.loading_frame = None
     
     def simulate_challenge(self):
         import random
@@ -753,6 +814,12 @@ class HasurGateApp(ctk.CTk):
         self.required_chant = self.challenge["chantText"]
         self.required_volume = self.challenge["requiredVolume"]
         self.after(0, self.go_to_chant_page)
+        if hasattr(self, 'loading_frame') and self.loading_frame is not None:
+            try:
+                self.loading_frame.destroy()
+            except:
+                pass
+            self.loading_frame = None
     
     # ==========================================================
     # PAGE NAVIGATION
@@ -786,7 +853,7 @@ class HasurGateApp(ctk.CTk):
         self.chant_countdown_label.configure(text="")
         self.chant_instruction_label.configure(
             text="👇 Press START CHANTING below — the mic only listens after you press it!",
-            text_color="#00aaff")
+            text_color="#b0b0b0")
         self.chant_start_btn.configure(state="normal", text="🎤 START CHANTING")
         self.proceed_to_dance_btn.pack_forget()
     
@@ -799,12 +866,10 @@ class HasurGateApp(ctk.CTk):
         self.dance_challenge_label.configure(
             text=f"🔄 {self.required_spins}x SPINS | 👏 {self.required_claps}x CLAPS\n"
                  f"🕺 Finish with: {self.challenge.get('finalMove', 'DAB').upper()}!")
-        self.dance_progress_label.configure(
-            text=f"🔄 SPINS: 0/{self.required_spins} | 👏 CLAPS: 0/{self.required_claps}")
         self.dance_countdown_label.configure(text="")
         self.dance_instruction_label.configure(
             text="👇 Press START DANCING below — Qwen-Vision only watches after you press it!",
-            text_color="#ff66ff")
+            text_color="#b0b0b0")
         self.dance_start_btn.configure(state="normal", text="💃 START DANCING")
     
     # ==========================================================
@@ -812,7 +877,7 @@ class HasurGateApp(ctk.CTk):
     # ==========================================================
     def start_chant_phase(self):
         self.chant_start_btn.configure(state="disabled", text="🎤 CHANTING...")
-        self.chant_instruction_label.configure(text="🎤 CHANT NOW! Speak loudly!", text_color="#00ff00")
+        self.chant_instruction_label.configure(text="🎤 CHANT NOW! Speak loudly!", text_color="#888")
         self.chant_heard_label.configure(text="🎤 Heard: Listening...")
         threading.Thread(target=self.run_chant_recording, daemon=True).start()
     
@@ -848,7 +913,7 @@ class HasurGateApp(ctk.CTk):
                 wavfile.write(chant_wav, 44100, audio_array)
             self.chant_countdown_label.configure(text="🔍")
             self.chant_instruction_label.configure(
-                text="⏳ Qwen-Audio is analyzing your chant...", text_color="#ffd700")
+                text="⏳ Qwen-Audio is analyzing your chant...", text_color="#888")
             threading.Thread(target=self.analyze_chant_thread, args=(chant_wav,), daemon=True).start()
             return
         self.chant_countdown_label.configure(text=f"🎤 {time_left:.1f}s")
@@ -864,12 +929,25 @@ class HasurGateApp(ctk.CTk):
             if audio_array.ndim > 1:
                 audio_array = audio_array.mean(axis=1)
             
+            # Compute actual loudness (dB) from the recorded audio
+            rms = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
+            # Map rms to 0-100 dB scale (calibrated empirically)
+            if rms > 0:
+                # audio array is int16, max rms ~32767, map to 0-100
+                db_val = min(100, int((rms / 32767) * 3000))
+            else:
+                db_val = 0
+            self.actual_loudness_percent = db_val
+            # Update the UI with the real dB
+            self.after(0, lambda: self.chant_decibel_bar.set(min(1.0, db_val / 100)))
+            self.after(0, lambda: self.chant_db_label.configure(text=f"{db_val} dB"))
+            
+            # Resample to 16kHz for Qwen-Audio API
             if audio_array.dtype in (np.float32, np.float64):
                 audio_int16 = (np.clip(audio_array, -1.0, 1.0) * 32767).astype(np.int16)
             else:
                 audio_int16 = audio_array.astype(np.int16)
             
-            # Resample to 16kHz
             try:
                 from scipy.signal import resample_poly
                 from math import gcd
@@ -929,7 +1007,7 @@ class HasurGateApp(ctk.CTk):
                     "volume_sufficient": True,
                     "passed": passed,
                     "reason": "Phrase detected" if phrase_detected else "Brainrot detected" if brainrot_detected else "Nothing detected",
-                    "loudness_percent": 75
+                    "loudness_percent": db_val  # use real measured dB
                 }
             else:
                 print(f"⚠️ API error: {response.text}")
@@ -942,7 +1020,7 @@ class HasurGateApp(ctk.CTk):
             
         except Exception as e:
             print(f"⚠️ Chant error: {e}")
-            measured_db = int(getattr(self, "live_decibel", 0))
+            db_val = self.actual_loudness_percent or 0
             fallback = {
                 "passed": True,
                 "reason": "Qwen-Audio fallback (demo mode)",
@@ -952,7 +1030,7 @@ class HasurGateApp(ctk.CTk):
                 "phrase_correct": True,
                 "brainrot_detected": True,
                 "volume_sufficient": True,
-                "loudness_percent": measured_db
+                "loudness_percent": db_val
             }
             self.audio_analysis_result = fallback
             self.chant_passed = True
@@ -972,20 +1050,20 @@ class HasurGateApp(ctk.CTk):
         self.chant_heard_label.configure(
             text=(f"📝 Qwen-Audio transcribed:\n\"{transcription}\"\n\n"
                   f"🔊 Volume: {str(volume).upper()} ({loudness} dB) {icon}{extra}"),
-            text_color="#4ade80" if passed else "#e94560",
+            text_color="#b0b0b0" if passed else "#888",
             wraplength=800, justify="center")
-        self.chant_decibel_bar.set(min(1.0, loudness / 100))
-        self.chant_db_label.configure(text=f"{loudness} dB")
+        # Update the bar and label already set during analysis
+        # (they were updated earlier)
         
         if passed:
             self.chant_instruction_label.configure(
                 text="✅ VOICE CHALLENGE PASSED! Proceed to the Dance Challenge below.",
-                text_color="#00ff88")
+                text_color="#888")
             self.chant_start_btn.configure(text="🎤 CHANT ✅")
         else:
             self.chant_instruction_label.configure(
                 text=f"❌ VOICE CHALLENGE FAILED: {result.get('reason', 'Unknown')}. Proceed anyway.",
-                text_color="#e94560")
+                text_color="#888")
             self.chant_start_btn.configure(text="🎤 CHANT ❌")
         
         self.proceed_to_dance_btn.pack(side="left", padx=10, pady=15)
@@ -996,20 +1074,18 @@ class HasurGateApp(ctk.CTk):
     def start_dance_phase(self):
         self.dance_start_btn.configure(state="disabled", text="💃 DANCING...")
         self.dance_instruction_label.configure(
-            text="💃 DANCE NOW! Spin! Clap! Hit the move!", text_color="#00ff00")
+            text="💃 DANCE NOW! Spin! Clap! Hit the move!", text_color="#888")
         threading.Thread(target=self.run_dance_recording, daemon=True).start()
     
     def run_dance_recording(self):
         duration = DANCE_DURATION
         folder = self.get_session_folder()
-        # Create a subfolder for frames
         frame_folder = f"{folder}/frames"
         os.makedirs(frame_folder, exist_ok=True)
         self.current_frame_folder = frame_folder
         self.frame_counter = 0
         self.is_recording = True
         
-        # Record audio as well
         samplerate = 44100
         self.audio_data = []
         
@@ -1018,8 +1094,6 @@ class HasurGateApp(ctk.CTk):
         
         stream = sd.InputStream(samplerate=samplerate, channels=1, callback=audio_cb)
         stream.start()
-        
-        # Start countdown
         self.after(0, lambda: self.dance_countdown(duration, stream, frame_folder))
     
     def dance_countdown(self, time_left, stream, frame_folder):
@@ -1033,23 +1107,20 @@ class HasurGateApp(ctk.CTk):
                 wavfile.write(audio_file, 44100, audio_array)
                 self.current_audio_filename = audio_file
             
-            # Now we have frame images in frame_folder
             print(f"📸 Saved {self.frame_counter} frames in {frame_folder}")
             self.dance_countdown_label.configure(text="🔍")
             self.dance_instruction_label.configure(
-                text="⏳ Qwen-Vision is counting your moves...", text_color="#ffd700")
+                text="⏳ Qwen-Vision is counting your moves...", text_color="#888")
             threading.Thread(target=self.analyze_dance_thread, args=(frame_folder,), daemon=True).start()
             return
         self.dance_countdown_label.configure(text=f"💃 {time_left:.1f}s")
         self.after(100, lambda: self.dance_countdown(time_left - 0.1, stream, frame_folder))
     
     def get_frames_from_images(self, folder, num_frames=DANCE_FRAMES):
-        """Read frames from saved JPEG images"""
         images = sorted([f for f in os.listdir(folder) if f.endswith('.jpg')])
         total = len(images)
         if total == 0:
             return []
-        # Sample evenly
         indices = [int(i * total / num_frames) for i in range(num_frames)]
         encoded = []
         for idx in indices:
@@ -1065,12 +1136,10 @@ class HasurGateApp(ctk.CTk):
     
     def analyze_dance_thread(self, frame_folder):
         try:
-            # Read frames from images
             frames_b64 = self.get_frames_from_images(frame_folder, num_frames=DANCE_FRAMES)
             if not frames_b64:
                 raise Exception("No frames extracted from images.")
             
-            # Try Qwen-Vision
             required_spins = self.required_spins
             required_claps = self.required_claps
             final_move = self.challenge.get('finalMove', 'dab')
@@ -1132,7 +1201,7 @@ class HasurGateApp(ctk.CTk):
                     continue
             
             if result is None:
-                # Fallback: simple motion detection using images
+                # Fallback motion detection
                 print("🔄 Falling back to local motion detection.")
                 images = sorted([f for f in os.listdir(frame_folder) if f.endswith('.jpg')])
                 frames = [cv2.imread(os.path.join(frame_folder, img)) for img in images if cv2.imread(os.path.join(frame_folder, img)) is not None]
@@ -1172,12 +1241,9 @@ class HasurGateApp(ctk.CTk):
                 self.realtime_claps = detected_claps
                 self.dance_passed = (detected_spins >= self.required_spins and detected_claps >= self.required_claps)
                 self.after(0, lambda: self.show_dance_result(result))
-                # Clean up frame folder (optional)
-                import shutil
                 shutil.rmtree(frame_folder)
                 return
             
-            # Process Qwen result
             self.vision_analysis_result = result
             detected_spins = result.get("detected_spins", 0)
             detected_claps = result.get("detected_claps", 0)
@@ -1202,8 +1268,6 @@ class HasurGateApp(ctk.CTk):
             self.dance_passed = False
             self.after(0, lambda: self.show_dance_result(fallback))
         finally:
-            # Clean up frame folder (optional)
-            import shutil
             try:
                 shutil.rmtree(frame_folder)
             except:
@@ -1215,21 +1279,17 @@ class HasurGateApp(ctk.CTk):
         det_c = result.get("detected_claps", 0)
         det_move = result.get("detected_final_move", "?")
         passed = self.dance_passed
-        s_icon = "✅" if det_s >= self.required_spins else "❌"
-        c_icon = "✅" if det_c >= self.required_claps else "❌"
-        m_icon = "✅" if result.get("final_move_correct", False) else "❌"
-        self.dance_progress_label.configure(
-            text=f"🔄 SPINS: {det_s}/{self.required_spins} {s_icon} | "
-                 f"👏 CLAPS: {det_c}/{self.required_claps} {c_icon} | "
-                 f"🕺 {det_move} {m_icon}")
+        # We removed the progress label, so just show a message.
+        # We'll update the instruction label with the result.
+        status_text = f"SPINS: {det_s}/{self.required_spins}  |  CLAPS: {det_c}/{self.required_claps}  |  MOVE: {det_move}"
         if passed:
             self.dance_instruction_label.configure(
-                text="✅ DANCE CHALLENGE PASSED! Evaluating...", text_color="#00ff88")
+                text=f"✅ DANCE CHALLENGE PASSED!\n{status_text}", text_color="#888")
             self.dance_start_btn.configure(text="💃 DANCE ✅")
         else:
             self.dance_instruction_label.configure(
-                text=f"❌ DANCE CHALLENGE FAILED: {result.get('reason', 'Unknown')}",
-                text_color="#e94560")
+                text=f"❌ DANCE CHALLENGE FAILED: {result.get('reason', 'Unknown')}\n{status_text}",
+                text_color="#888")
             self.dance_start_btn.configure(text="💃 DANCE ❌")
         self.after(2000, self.evaluate_final_result)
     
@@ -1298,9 +1358,9 @@ class HasurGateApp(ctk.CTk):
     
     def flash_overlay(self, count):
         if count <= 0:
-            self.failure_overlay.configure(fg_color="#e94560")
+            self.failure_overlay.configure(fg_color="#3a3a3a")
             return
-        self.failure_overlay.configure(fg_color="#e94560" if count % 2 == 0 else "#000000")
+        self.failure_overlay.configure(fg_color="#3a3a3a" if count % 2 == 0 else "#1a1a1a")
         self.after(300, lambda: self.flash_overlay(count - 1))
     
     def advance_attempt(self):
@@ -1316,7 +1376,7 @@ class HasurGateApp(ctk.CTk):
             self.play_background_music(0.3)
     
     # ==========================================================
-    # ANSWER WITH LOADING ANIMATION
+    # ANSWER WITH LOADING ANIMATION (ChatGPT-style thinking)
     # ==========================================================
     def show_answer(self):
         self.chant_frame.pack_forget()
@@ -1326,22 +1386,27 @@ class HasurGateApp(ctk.CTk):
         self.answer_loading_frame.pack(fill="both", expand=True)
         self.answer_loading_frame.lift()
         
-        self.answer_loading_dots = 0
+        # ChatGPT-style thinking indicator
+        self.answer_loading_icon = ctk.CTkLabel(self.answer_loading_frame, text="⚪", font=ctk.CTkFont(size=30), text_color="#6a6a6a")
+        self.answer_loading_icon.pack(pady=(100, 10))
+        self.answer_loading_text = ctk.CTkLabel(self.answer_loading_frame, text="Generating answer", font=ctk.CTkFont(size=22, weight="bold"), text_color="#b0b0b0")
+        self.answer_loading_text.pack(pady=5)
+        self.answer_loading_sub = ctk.CTkLabel(self.answer_loading_frame, text="Refining the brainrot...", font=ctk.CTkFont(size=16), text_color="#6a6a6a")
+        self.answer_loading_sub.pack(pady=5)
+        # Animate dots
+        self.answer_dots = 0
         self.animate_answer_dots()
-        
-        question_preview = self.question[:20]
-        answer_phrases = [
-            f"💬 Formulating a brainrot response to '{question_preview}'...",
-            f"🤖 Hasur is cooking up nonsense about '{question_preview}'...",
-            f"🌀 Twisting the truth about '{question_preview}'...",
-            f"🔥 Generating maximum chaos for '{question_preview}'...",
-            f"🎭 Hasur is preparing a terrible answer for '{question_preview}'...",
-            f"💀 Summoning the brainrot for '{question_preview}'...",
+        # Rotating sub-phrases
+        self.answer_phrases = [
+            "Refining the brainrot...",
+            "Hasur is cooking...",
+            "Twisting the truth...",
+            "Generating chaos...",
+            "Preparing your nonsense..."
         ]
-        random.shuffle(answer_phrases)
-        self.answer_loading_phrases = answer_phrases
-        self.answer_loading_index = 0
-        self.update_answer_loading_phrases()
+        random.shuffle(self.answer_phrases)
+        self.answer_phrase_idx = 0
+        self.update_answer_phrases()
         
         self.stop_background_music()
         threading.Thread(target=self.get_wrong_answer_thread, daemon=True).start()
@@ -1349,23 +1414,23 @@ class HasurGateApp(ctk.CTk):
     def animate_answer_dots(self):
         if not self.answer_loading_frame.winfo_ismapped():
             return
-        dots = "." * (self.answer_loading_dots % 4)
-        self.answer_loading_label.configure(text=f"⏳ Generating answer{dots}")
-        self.answer_loading_dots += 1
+        dots = "." * (self.answer_dots % 4)
+        self.answer_loading_text.configure(text=f"Generating answer{dots}")
+        self.answer_dots += 1
         self.after(500, self.animate_answer_dots)
     
-    def update_answer_loading_phrases(self):
+    def update_answer_phrases(self):
         if not self.answer_loading_frame.winfo_ismapped():
             return
-        if self.answer_loading_index < len(self.answer_loading_phrases):
-            phrase = self.answer_loading_phrases[self.answer_loading_index]
-            self.answer_loading_sub_label.configure(text=phrase)
-            self.answer_loading_index += 1
-            self.after(1200, self.update_answer_loading_phrases)
+        if self.answer_phrase_idx < len(self.answer_phrases):
+            phrase = self.answer_phrases[self.answer_phrase_idx]
+            self.answer_loading_sub.configure(text=phrase)
+            self.answer_phrase_idx += 1
+            self.after(1200, self.update_answer_phrases)
         else:
-            random.shuffle(self.answer_loading_phrases)
-            self.answer_loading_index = 0
-            self.after(1200, self.update_answer_loading_phrases)
+            random.shuffle(self.answer_phrases)
+            self.answer_phrase_idx = 0
+            self.after(1200, self.update_answer_phrases)
     
     def get_wrong_answer_thread(self):
         try:
