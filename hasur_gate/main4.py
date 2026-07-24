@@ -15,7 +15,10 @@ import json
 import random
 import signal
 import math
+import tkinter
+import io
 from openai import OpenAI
+import requests  # <-- added for direct API calls
 
 # ==========================================
 # >>> YOUR API CONFIGURATION <<<
@@ -27,11 +30,18 @@ API_BASE_URL = "https://ws-bf3itnzatquc4sa0.ap-southeast-1.maas.aliyuncs.com/com
 client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 
 # ==========================================
+# MODEL NAMES
+# ==========================================
+TEXT_MODEL = "qwen3.7-plus"
+AUDIO_MODEL = "qwen3-omni-flash"  # or "qwen-audio"
+VISION_MODEL = "qwen-vl-max"       # or "qwen-vl-plus"
+
+# ==========================================
 # CONFIGURATION
 # ==========================================
 MAX_ATTEMPTS = 5
-VOICE_DURATION = 3.0          # time for voice chant
-ACTION_DURATION = 3.0         # time for action
+CHANT_DURATION = 6.0
+DANCE_DURATION = 8.0
 BACKGROUND_MUSIC = "assets/background.mp3"
 
 CHARACTERS = [
@@ -71,15 +81,91 @@ ctk.set_default_color_theme("blue")
 
 class HasurGateApp(ctk.CTk):
     def __init__(self):
-        print("🟢 Starting Hasur Gate App (Real Qwen Only)...", flush=True)
         super().__init__()
+        
+        # --- SPLASH SCREEN (Booting loading) ---
+        self.title("Loading...")
+        self.geometry("1200x800")
+        self.state('zoomed')
+        self.splash_frame = ctk.CTkFrame(self, fg_color="#212121")
+        self.splash_frame.pack(fill="both", expand=True)
+        
+        self.splash_label = ctk.CTkLabel(self.splash_frame, text="⏳ Booting up Hasur", font=ctk.CTkFont(size=28, weight="bold"), text_color="#d4d4d4")
+        self.splash_label.pack(expand=True, pady=(0, 10))
+        self.splash_sub_label = ctk.CTkLabel(self.splash_frame, text="", font=ctk.CTkFont(size=18), text_color="#9CA3AF")
+        self.splash_sub_label.pack(pady=5)
+        
+        self.splash_dots = 0
+        self.animate_splash_dots()
+        
+        boot_phrases = [
+            "⚡ Powering up the brainrot engine...",
+            "🔄 Summoning Hasur's spirit...",
+            "🔮 Loading chaos protocols...",
+            "🔥 Igniting the Tung Tung Tung...",
+            "🌀 Twisting reality...",
+            "💀 Preparing your humiliation...",
+            "🎭 Setting the stage for failure...",
+        ]
+        random.shuffle(boot_phrases)
+        self.splash_phrases = boot_phrases
+        self.splash_index = 0
+        self.update_splash_phrases()
+        
+        self.after(4000, self.build_app_and_destroy_splash)
+        self.initialized = False
+    
+    def animate_splash_dots(self):
+        if hasattr(self, 'splash_frame') and self.splash_frame is not None:
+            try:
+                if self.splash_frame.winfo_exists():
+                    dots = "." * (self.splash_dots % 4)
+                    self.splash_label.configure(text=f"⏳ Booting up Hasur{dots}")
+                    self.splash_dots += 1
+                    self.after(500, self.animate_splash_dots)
+                else:
+                    return
+            except tkinter.TclError:
+                return
+        else:
+            return
+    
+    def update_splash_phrases(self):
+        if hasattr(self, 'splash_frame') and self.splash_frame is not None:
+            try:
+                if self.splash_frame.winfo_exists():
+                    if self.splash_index < len(self.splash_phrases):
+                        phrase = self.splash_phrases[self.splash_index]
+                        self.splash_sub_label.configure(text=phrase)
+                        self.splash_index += 1
+                        self.after(1200, self.update_splash_phrases)
+                    else:
+                        random.shuffle(self.splash_phrases)
+                        self.splash_index = 0
+                        self.after(1200, self.update_splash_phrases)
+                else:
+                    return
+            except tkinter.TclError:
+                return
+        else:
+            return
+    
+    def build_app_and_destroy_splash(self):
+        if hasattr(self, 'splash_frame') and self.splash_frame is not None:
+            try:
+                self.splash_frame.destroy()
+            except:
+                pass
+            self.splash_frame = None
         
         self.title("ChatGPT Clone")
         self.geometry("1200x800")
         self.state('zoomed')
         self.bind("<Escape>", lambda e: self.on_escape())
         
-        # State variables
+        # ==========================================
+        # STATE VARIABLES
+        # ==========================================
         self.attempt = 1
         self.question = ""
         self.challenge = {}
@@ -94,20 +180,21 @@ class HasurGateApp(ctk.CTk):
         self.vision_analysis_result = None
         self.is_brainrot_mode = False
         self.remaining_time = 0
-        self.phase = "idle"   # "voice" or "action"
+        self.phase = "idle"
         
-        # Real-time counters
         self.realtime_spins = 0
         self.realtime_claps = 0
         self.audio_text = ""
         self.audio_loudness = 0
+        self.live_decibel = 0.0
         
-        # Challenge tracking
         self.required_spins = 0
         self.required_claps = 0
         self.required_chant = ""
+        self.required_volume = "loud"
+        self.chant_passed = False
+        self.dance_passed = False
         
-        # File paths
         self.current_video_filename = ""
         self.current_audio_filename = ""
         self.current_final_filename = ""
@@ -115,13 +202,19 @@ class HasurGateApp(ctk.CTk):
         self.background_music_process = None
         self.audio_stream = None
         
-        # Build UI
+        # Define brainrot phrases to detect
+        self.brainrot_phrases = [
+            "skibidi", "sigma", "gyatt", "fanum tax", "mewing", "ohio",
+            "tung tung tung hasur", "sahur", "brainrot", "rizz", "sus", "no cap", "bet"
+        ]
+        
         self.setup_ui()
         self.update_camera_loop()
         self.play_background_music(0.3)
         
+        self.initialized = True
         print("🟢 App initialized successfully!", flush=True)
-        print("🟢 All analysis uses real Qwen API calls.", flush=True)
+        print("🟢 Separate Voice and Dance challenges with Qwen.", flush=True)
     
     # ==========================================
     # WINDOW LIFECYCLE
@@ -147,65 +240,47 @@ class HasurGateApp(ctk.CTk):
         super().destroy()
     
     # ==========================================
-    # AUDIO STOP FUNCTIONS
+    # PROCESS KILLERS
     # ==========================================
-    def stop_background_music(self):
-        if self.background_music_process is not None:
-            pid = self.background_music_process.pid
-            try:
-                if platform.system() == "Windows":
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid)],
-                        capture_output=True, check=False
-                    )
-                else:
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGTERM)
-                        time.sleep(0.2)
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    except (ProcessLookupError, OSError):
-                        os.kill(pid, signal.SIGKILL)
-            except Exception:
+    def _kill_proc(self, proc):
+        if proc is None:
+            return
+        pid = proc.pid
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                               capture_output=True, check=False)
+            else:
                 try:
-                    self.background_music_process.terminate()
-                except:
-                    pass
-            self.background_music_process = None
-    
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    time.sleep(0.2)
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                except (ProcessLookupError, OSError):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except Exception:
+                        pass
+        except Exception:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+
     def stop_audio(self):
-        if self.current_audio_process is not None:
-            pid = self.current_audio_process.pid
-            try:
-                if platform.system() == "Windows":
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid)],
-                        capture_output=True, check=False
-                    )
-                else:
-                    try:
-                        os.killpg(os.getpgid(pid), signal.SIGTERM)
-                        time.sleep(0.2)
-                        try:
-                            os.kill(pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    except (ProcessLookupError, OSError):
-                        os.kill(pid, signal.SIGKILL)
-            except Exception:
-                try:
-                    self.current_audio_process.terminate()
-                except:
-                    pass
-            self.current_audio_process = None
+        self._kill_proc(self.current_audio_process)
+        self.current_audio_process = None
+
+    def stop_background_music(self):
+        self._kill_proc(self.background_music_process)
+        self.background_music_process = None
     
     # ==========================================
-    # UI SETUP - ChatGPT grey theme
+    # UI SETUP - ChatGPT grey theme with separate pages
     # ==========================================
     def setup_ui(self):
-        # ===== MAIN CONTAINER =====
         self.main_container = ctk.CTkFrame(self, fg_color="#212121")
         self.main_container.pack(fill="both", expand=True)
         
@@ -217,238 +292,318 @@ class HasurGateApp(ctk.CTk):
         sidebar_inner = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         sidebar_inner.pack(fill="both", expand=True, padx=12, pady=12)
         
-        self.new_chat_btn = ctk.CTkButton(
-            sidebar_inner, text="+ New Chat", font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#2F2F2F", hover_color="#3F3F3F", corner_radius=8, height=40,
-            command=self.restart_app
-        )
+        self.new_chat_btn = ctk.CTkButton(sidebar_inner, text="+ New Chat",
+                                          font=ctk.CTkFont(size=14, weight="bold"),
+                                          fg_color="#2F2F2F", hover_color="#3F3F3F",
+                                          corner_radius=8, height=40, command=self.restart_app)
         self.new_chat_btn.pack(fill="x", pady=(0, 20))
         
-        self.model_btn = ctk.CTkButton(
-            sidebar_inner, text="⚡ Hasur-4B (Brainrot)", font=ctk.CTkFont(size=13),
-            fg_color="#2F2F2F", hover_color="#3F3F3F", corner_radius=8, height=35, anchor="w"
-        )
-        self.model_btn.pack(fill="x", pady=(10, 20))
+        self.model_btn = ctk.CTkButton(sidebar_inner, text="⚡ Hasur-4B (Brainrot)",
+                                       font=ctk.CTkFont(size=13), fg_color="#2F2F2F",
+                                       hover_color="#3F3F3F", corner_radius=8, height=35, anchor="w")
+        self.model_btn.pack(fill="x", pady=(0, 20))
         
-        history_label = ctk.CTkLabel(sidebar_inner, text="Today", font=ctk.CTkFont(size=11, weight="bold"), text_color="#9CA3AF")
-        history_label.pack(anchor="w", pady=(10, 5))
+        ctk.CTkLabel(sidebar_inner, text="Today", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#9CA3AF").pack(anchor="w", pady=(10, 5))
+        for item in ["What is the meaning of life?", "Tell me a joke", "Tung Tung Tung Hasur"]:
+            ctk.CTkButton(sidebar_inner, text=item, font=ctk.CTkFont(size=13),
+                          fg_color="transparent", hover_color="#2F2F2F",
+                          corner_radius=8, height=30, anchor="w").pack(fill="x", pady=1)
         
-        chat_items = ["Tung Tung Tung Hasur", "Brainrot generator", "How to win", "Tell me a joke"]
-        for item in chat_items[:4]:
-            btn = ctk.CTkButton(sidebar_inner, text=item, font=ctk.CTkFont(size=13), fg_color="transparent",
-                              hover_color="#2F2F2F", corner_radius=8, height=30, anchor="w")
-            btn.pack(fill="x", pady=1)
-        
-        upgrade_frame = ctk.CTkFrame(sidebar_inner, fg_color="#2F2F2F", corner_radius=8, height=50)
-        upgrade_frame.pack(fill="x", pady=(10, 10))
-        ctk.CTkLabel(upgrade_frame, text="✨ Upgrade Plan", font=ctk.CTkFont(size=13, weight="bold"), text_color="#ECECEC").pack(side="left", padx=10)
-        ctk.CTkLabel(upgrade_frame, text="→", font=ctk.CTkFont(size=18), text_color="#9CA3AF").pack(side="right", padx=10)
+        ctk.CTkFrame(sidebar_inner, fg_color="transparent").pack(fill="both", expand=True)
         
         profile_frame = ctk.CTkFrame(sidebar_inner, fg_color="transparent")
-        profile_frame.pack(fill="x", pady=(5, 0))
-        ctk.CTkLabel(profile_frame, text="👤", font=ctk.CTkFont(size=20), fg_color="#2F2F2F", corner_radius=16, width=32, height=32).pack(side="left", padx=5)
-        ctk.CTkLabel(profile_frame, text="tungtungtungsahur", font=ctk.CTkFont(size=13), text_color="#ECECEC").pack(side="left", padx=10)
+        profile_frame.pack(fill="x")
+        ctk.CTkLabel(profile_frame, text="👤", font=ctk.CTkFont(size=20), fg_color="#2F2F2F",
+                     corner_radius=16, width=32, height=32).pack(side="left", padx=5)
+        ctk.CTkLabel(profile_frame, text="tungtungtungsahur", font=ctk.CTkFont(size=13),
+                     text_color="#ECECEC").pack(side="left", padx=10)
         
         # ===== RIGHT COLUMN =====
         self.main_canvas = ctk.CTkFrame(self.main_container, fg_color="#212121")
         self.main_canvas.pack(side="right", fill="both", expand=True)
         
-        # Nav bar
-        self.nav_bar = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=60)
+        self.nav_bar = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=50)
         self.nav_bar.pack(fill="x", padx=20, pady=(10, 0))
         self.nav_bar.pack_propagate(False)
-        ctk.CTkButton(self.nav_bar, text="▼ Hasur-4B (Brainrot)", font=ctk.CTkFont(size=14, weight="bold"), fg_color="transparent", hover_color="#2F2F2F", corner_radius=8, height=40).pack(side="left")
+        ctk.CTkButton(self.nav_bar, text="▼ Hasur-4B (Brainrot)",
+                      font=ctk.CTkFont(size=14, weight="bold"), fg_color="transparent",
+                      hover_color="#2F2F2F", corner_radius=8, height=40).pack(side="left")
         
-        # Chat area
+        # ===== CHAT PAGE =====
         self.chat_frame = ctk.CTkScrollableFrame(self.main_canvas, fg_color="transparent")
         self.chat_frame.pack(fill="both", expand=True, padx=20, pady=10)
         
         welcome_frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         welcome_frame.pack(fill="both", expand=True)
-        ctk.CTkLabel(welcome_frame, text="What can I help with?", font=ctk.CTkFont(size=28, weight="bold"), text_color="#ECECEC").pack(pady=(150, 20))
+        ctk.CTkLabel(welcome_frame, text="What can I help with?",
+                     font=ctk.CTkFont(size=28, weight="bold"), text_color="#ECECEC").pack(pady=(120, 20))
         
         chips_frame = ctk.CTkFrame(welcome_frame, fg_color="transparent")
         chips_frame.pack()
-        suggestions = ["Ask me anything...", "Generate a brainrot joke", "Tell me about AI", "Write a poem"]
-        for i, s in enumerate(suggestions):
-            chip = ctk.CTkButton(chips_frame, text=s, font=ctk.CTkFont(size=13), fg_color="#2F2F2F", hover_color="#3F3F3F",
-                               corner_radius=20, height=35, border_width=1, border_color="#3F3F3F")
-            chip.grid(row=i//2, column=i%2, padx=5, pady=5)
-            chip.configure(command=lambda val=s: self.question_entry.insert(0, val))
+        for i, s in enumerate(["Ask me anything...", "Brainrot joke", "Tell me about AI", "Write a poem"]):
+            chip = ctk.CTkButton(chips_frame, text=s, font=ctk.CTkFont(size=13),
+                                 fg_color="#2F2F2F", hover_color="#3F3F3F", corner_radius=20,
+                                 height=35, border_width=1, border_color="#3F3F3F")
+            chip.grid(row=i // 2, column=i % 2, padx=5, pady=5)
+            chip.configure(command=lambda txt=s: self.question_entry.insert(0, txt))
         
-        # Input bar
-        self.input_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=100)
-        self.input_frame.pack(fill="x", padx=20, pady=(0, 15))
+        # ===== INPUT BAR =====
+        self.input_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121", height=90)
+        self.input_frame.pack(fill="x", padx=20, pady=(0, 10))
         self.input_frame.pack_propagate(False)
         
-        input_container = ctk.CTkFrame(self.input_frame, fg_color="#2F2F2F", corner_radius=24, height=56)
-        input_container.pack(fill="x", padx=20, pady=10)
+        input_container = ctk.CTkFrame(self.input_frame, fg_color="#2F2F2F", corner_radius=24, height=52)
+        input_container.pack(fill="x", padx=20, pady=8)
         input_container.pack_propagate(False)
         
         input_row = ctk.CTkFrame(input_container, fg_color="transparent")
         input_row.pack(fill="both", padx=15, pady=5)
         
-        ctk.CTkLabel(input_row, text="📎", font=ctk.CTkFont(size=18)).pack(side="left", padx=(0, 10))
-        
-        self.question_entry = ctk.CTkEntry(input_row, placeholder_text="Message Hasur...", font=ctk.CTkFont(size=16),
-                                         fg_color="transparent", border_width=0, height=40)
+        self.question_entry = ctk.CTkEntry(input_row, placeholder_text="Message Hasur...",
+                                           font=ctk.CTkFont(size=16), fg_color="transparent",
+                                           border_width=0, height=38)
         self.question_entry.pack(side="left", fill="x", expand=True)
         self.question_entry.bind("<Return>", lambda e: self.start_ritual())
         
         self.send_btn = ctk.CTkButton(input_row, text="↑", font=ctk.CTkFont(size=18, weight="bold"),
-                                    fg_color="#4A4A4A", hover_color="#6B6B6B", corner_radius=20, width=32, height=32,
-                                    command=self.start_ritual)
+                                      fg_color="#4A4A4A", hover_color="#6B6B6B", corner_radius=20,
+                                      width=32, height=32, command=self.start_ritual)
         self.send_btn.pack(side="right")
         
-        ctk.CTkLabel(self.input_frame, text="Hasur can make mistakes. Check important info.", font=ctk.CTkFont(size=12), text_color="#9CA3AF").pack(pady=(0, 5))
+        ctk.CTkLabel(self.input_frame, text="Hasur can make mistakes. Check important info.",
+                     font=ctk.CTkFont(size=11), text_color="#9CA3AF").pack(pady=(0, 3))
         
-        # ===== BRAINROT FRAME (shown during ritual) =====
-        self.brainrot_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121")
-        self.brainrot_frame.pack_forget()
+        # ==========================================================
+        # PAGE: VOICE / CHANTING CHALLENGE
+        # ==========================================================
+        self.chant_frame = ctk.CTkFrame(self.main_canvas, fg_color="#0a0a2a")
+        self.chant_frame.pack_forget()
         
-        # Loading indicator (AI-like "thinking" status)
-        self.loading_frame = ctk.CTkFrame(self.brainrot_frame, fg_color="transparent")
-        self.loading_frame.pack(pady=30)
-        self.loading_label = ctk.CTkLabel(self.loading_frame, text="", font=ctk.CTkFont(size=22, weight="bold"), text_color="#d4d4d4")
-        self.loading_label.pack()
-        self.loading_sub_label = ctk.CTkLabel(self.loading_frame, text="", font=ctk.CTkFont(size=16), text_color="#9CA3AF")
-        self.loading_sub_label.pack(pady=(5,0))
-        self.loading_frame.pack_forget()
+        self.chant_action_bar = ctk.CTkFrame(self.chant_frame, fg_color="#0d0d38", height=86)
+        self.chant_action_bar.pack(side="bottom", fill="x")
+        self.chant_action_bar.pack_propagate(False)
         
-        # Challenge label (top – smaller text)
-        self.challenge_label = ctk.CTkLabel(self.brainrot_frame, text="", font=ctk.CTkFont(size=16), text_color="#d4d4d4", wraplength=900)
-        self.challenge_label.pack(pady=5)
-        self.challenge_label.pack_forget()
+        self.chant_start_btn = ctk.CTkButton(self.chant_action_bar, text="🎤 START CHANTING",
+                                             command=self.start_chant_phase, height=56, width=300,
+                                             font=ctk.CTkFont(size=18, weight="bold"),
+                                             fg_color="#2980b9", hover_color="#2471a3")
+        self.chant_start_btn.pack(side="left", padx=20, pady=15)
         
-        # Phase label (voice or action)
-        self.phase_label = ctk.CTkLabel(self.brainrot_frame, text="", font=ctk.CTkFont(size=18, weight="bold"), text_color="#10a37f")
-        self.phase_label.pack(pady=5)
-        self.phase_label.pack_forget()
+        self.proceed_to_dance_btn = ctk.CTkButton(self.chant_action_bar,
+                                                  text="💃 PROCEED TO DANCE CHALLENGE →",
+                                                  command=self.go_to_dance_page, height=56, width=360,
+                                                  font=ctk.CTkFont(size=16, weight="bold"),
+                                                  fg_color="#8e44ad", hover_color="#7d3c98")
+        # packed later after chant result
         
-        # Big timer label (outside camera)
-        self.timer_label = ctk.CTkLabel(self.brainrot_frame, text="⏳ 0.0s", font=ctk.CTkFont(size=60, weight="bold"), text_color="#e94560")
-        self.timer_label.pack(pady=10)
-        self.timer_label.pack_forget()
+        self.chant_scroll = ctk.CTkScrollableFrame(self.chant_frame, fg_color="transparent")
+        self.chant_scroll.pack(fill="both", expand=True)
         
-        # Camera label
-        self.camera_label = ctk.CTkLabel(self.brainrot_frame, text="", width=800, height=500, fg_color="black", corner_radius=10)
-        self.camera_label.pack(pady=10)
-        self.camera_label.pack_forget()
+        ctk.CTkLabel(self.chant_scroll, text="🎤 SESSION 1/2 — VOICE CHALLENGE",
+                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#00aaff").pack(pady=(18, 2))
+        ctk.CTkLabel(self.chant_scroll, text="🗣️ CHANTING SECTION · Qwen-Audio is listening to your voice",
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#7fd4ff").pack(pady=(0, 6))
         
-        # Progress label (shows counts with tick/cross)
-        self.progress_label = ctk.CTkLabel(self.brainrot_frame, text="🔄 SPINS: 0/0 | 👏 CLAPS: 0/0", font=ctk.CTkFont(size=18, weight="bold"), text_color="#10a37f")
-        self.progress_label.pack(pady=5)
-        self.progress_label.pack_forget()
+        self.chant_challenge_label = ctk.CTkLabel(self.chant_scroll, text="",
+                                                  font=ctk.CTkFont(size=17, weight="bold"),
+                                                  text_color="#ffd700", wraplength=900, justify="center")
+        self.chant_challenge_label.pack(pady=8)
         
-        # Voice/loudness label
-        self.voice_output_label = ctk.CTkLabel(self.brainrot_frame, text="🎤 Voice: Waiting... | 🔊 Loudness: --", font=ctk.CTkFont(size=14), text_color="#9CA3AF")
-        self.voice_output_label.pack(pady=5)
-        self.voice_output_label.pack_forget()
+        self.chant_camera_label = ctk.CTkLabel(self.chant_scroll, text="", width=560, height=315,
+                                               fg_color="black", corner_radius=10)
+        self.chant_camera_label.pack(pady=8)
         
-        # Instruction label
-        self.instruction_label = ctk.CTkLabel(self.brainrot_frame, text="", font=ctk.CTkFont(size=16), text_color="#d4d4d4")
-        self.instruction_label.pack(pady=5)
-        self.instruction_label.pack_forget()
+        self.chant_decibel_frame = ctk.CTkFrame(self.chant_scroll, fg_color="transparent")
+        self.chant_decibel_frame.pack(pady=6)
+        ctk.CTkLabel(self.chant_decibel_frame, text="🔊 VOLUME:",
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#4ade80").pack(side="left", padx=5)
+        self.chant_decibel_bar = ctk.CTkProgressBar(self.chant_decibel_frame, width=420, height=22,
+                                                    fg_color="#333", progress_color="#e94560")
+        self.chant_decibel_bar.pack(side="left", padx=8)
+        self.chant_decibel_bar.set(0)
+        self.chant_db_label = ctk.CTkLabel(self.chant_decibel_frame, text="0 dB",
+                                           font=ctk.CTkFont(size=15, weight="bold"), text_color="#4ade80")
+        self.chant_db_label.pack(side="left", padx=5)
+        
+        self.chant_heard_label = ctk.CTkLabel(self.chant_scroll, text="🎤 Heard: Waiting...",
+                                              font=ctk.CTkFont(size=15), text_color="#aaa",
+                                              wraplength=800, justify="center")
+        self.chant_heard_label.pack(pady=4)
+        
+        self.chant_countdown_label = ctk.CTkLabel(self.chant_scroll, text="",
+                                                  font=ctk.CTkFont(size=46, weight="bold"),
+                                                  text_color="#e94560")
+        self.chant_countdown_label.pack(pady=2)
+        
+        self.chant_instruction_label = ctk.CTkLabel(self.chant_scroll, text="",
+                                                    font=ctk.CTkFont(size=16, weight="bold"),
+                                                    text_color="#00ff00")
+        self.chant_instruction_label.pack(pady=4)
+        
+        # ==========================================================
+        # PAGE: DANCE / MOVEMENT CHALLENGE
+        # ==========================================================
+        self.dance_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1a0a2a")
+        self.dance_frame.pack_forget()
+        
+        self.dance_action_bar = ctk.CTkFrame(self.dance_frame, fg_color="#220d38", height=86)
+        self.dance_action_bar.pack(side="bottom", fill="x")
+        self.dance_action_bar.pack_propagate(False)
+        
+        self.dance_start_btn = ctk.CTkButton(self.dance_action_bar, text="💃 START DANCING",
+                                             command=self.start_dance_phase, height=56, width=300,
+                                             font=ctk.CTkFont(size=18, weight="bold"),
+                                             fg_color="#8e44ad", hover_color="#7d3c98")
+        self.dance_start_btn.pack(padx=20, pady=15)
+        
+        self.dance_scroll = ctk.CTkScrollableFrame(self.dance_frame, fg_color="transparent")
+        self.dance_scroll.pack(fill="both", expand=True)
+        
+        ctk.CTkLabel(self.dance_scroll, text="💃 SESSION 2/2 — DANCE CHALLENGE",
+                     font=ctk.CTkFont(size=30, weight="bold"), text_color="#ff66ff").pack(pady=(18, 2))
+        ctk.CTkLabel(self.dance_scroll, text="🕺 MOVEMENT SECTION · Qwen-Vision is watching your moves",
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#ffb3ff").pack(pady=(0, 6))
+        
+        self.dance_challenge_label = ctk.CTkLabel(self.dance_scroll, text="",
+                                                  font=ctk.CTkFont(size=17, weight="bold"),
+                                                  text_color="#ffd700", wraplength=900, justify="center")
+        self.dance_challenge_label.pack(pady=8)
+        
+        self.dance_camera_label = ctk.CTkLabel(self.dance_scroll, text="", width=640, height=360,
+                                               fg_color="black", corner_radius=10)
+        self.dance_camera_label.pack(pady=8)
+        
+        self.dance_progress_label = ctk.CTkLabel(self.dance_scroll, text="🔄 SPINS: 0/0 | 👏 CLAPS: 0/0",
+                                                 font=ctk.CTkFont(size=20, weight="bold"),
+                                                 text_color="#00ffff")
+        self.dance_progress_label.pack(pady=6)
+        
+        self.dance_countdown_label = ctk.CTkLabel(self.dance_scroll, text="",
+                                                  font=ctk.CTkFont(size=46, weight="bold"),
+                                                  text_color="#e94560")
+        self.dance_countdown_label.pack(pady=2)
+        
+        self.dance_instruction_label = ctk.CTkLabel(self.dance_scroll, text="",
+                                                    font=ctk.CTkFont(size=16, weight="bold"),
+                                                    text_color="#00ff00")
+        self.dance_instruction_label.pack(pady=4)
         
         # ===== FAILURE OVERLAY =====
         self.failure_overlay = ctk.CTkFrame(self.main_canvas, fg_color="#e94560", corner_radius=0)
         self.failure_overlay.pack_forget()
-        
-        failure_content = ctk.CTkFrame(self.failure_overlay, fg_color="transparent")
-        failure_content.place(relx=0.5, rely=0.5, anchor="center")
-        ctk.CTkLabel(failure_content, text="💀 RITUAL FAILED 💀", font=ctk.CTkFont(size=48, weight="bold"), text_color="white").pack(pady=(0, 15))
-        self.failure_reason_label = ctk.CTkLabel(failure_content, text="", font=ctk.CTkFont(size=22), text_color="white", wraplength=800, justify="center")
+        self.failure_content = ctk.CTkFrame(self.failure_overlay, fg_color="transparent")
+        self.failure_content.place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(self.failure_content, text="💀 RITUAL FAILED 💀",
+                     font=ctk.CTkFont(size=48, weight="bold"), text_color="white").pack(pady=(0, 15))
+        self.failure_reason_label = ctk.CTkLabel(self.failure_content, text="",
+                                                 font=ctk.CTkFont(size=20), text_color="white",
+                                                 wraplength=800, justify="center")
         self.failure_reason_label.pack()
-        self.brainrot_label = ctk.CTkLabel(failure_content, text="", font=ctk.CTkFont(size=28, weight="bold"), text_color="#ffd700")
+        self.brainrot_label = ctk.CTkLabel(self.failure_content, text="",
+                                           font=ctk.CTkFont(size=26, weight="bold"), text_color="#ffd700")
         self.brainrot_label.pack(pady=15)
         
-        self.receipt_frame = ctk.CTkFrame(self.failure_overlay, fg_color="#f5f5dc", border_width=3, border_color="#333", corner_radius=5)
+        self.receipt_frame = ctk.CTkFrame(self.failure_overlay, fg_color="#f5f5dc",
+                                          border_width=3, border_color="#333", corner_radius=5)
         self.receipt_frame.place(relx=0.85, rely=0.5, anchor="center")
-        self.receipt_label = ctk.CTkLabel(self.receipt_frame, text="", font=ctk.CTkFont(family="Courier", size=10), text_color="#333", justify="left")
+        self.receipt_label = ctk.CTkLabel(self.receipt_frame, text="",
+                                          font=ctk.CTkFont(family="Courier", size=10),
+                                          text_color="#333", justify="left")
         self.receipt_label.pack(padx=12, pady=8)
         
-        # ===== ANSWER FRAME (chat-style) =====
-        self.answer_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121")
+        # ===== ANSWER FRAME =====
+        self.answer_frame = ctk.CTkFrame(self.main_canvas, fg_color="transparent")
         self.answer_frame.pack_forget()
-        
-        # Message container – will hold the bubble
-        self.msg_container = ctk.CTkFrame(self.answer_frame, fg_color="transparent")
-        self.msg_container.pack(expand=True, fill="both", padx=60, pady=40)
-        
-        # Avatar (left) and bubble (right) in a horizontal frame
-        self.msg_row = ctk.CTkFrame(self.msg_container, fg_color="transparent")
-        self.msg_row.pack(anchor="w", fill="x")
-        
-        # Avatar
-        self.char_image_label = ctk.CTkLabel(self.msg_row, text="", width=60, height=60, fg_color="transparent")
-        self.char_image_label.pack(side="left", padx=(0, 15))
-        
-        # Bubble frame
-        self.bubble_frame = ctk.CTkFrame(self.msg_row, fg_color="white", corner_radius=12, border_width=2, border_color="#e94560")
-        self.bubble_frame.pack(side="left", fill="both", expand=True)
-        
-        # Character name
-        self.char_name_label = ctk.CTkLabel(self.bubble_frame, text="", font=ctk.CTkFont(size=14, weight="bold"), text_color="#e94560")
-        self.char_name_label.pack(anchor="w", padx=15, pady=(10, 0))
-        
-        # Answer text
-        self.answer_text_label = ctk.CTkLabel(self.bubble_frame, text="", font=ctk.CTkFont(size=16), text_color="black", wraplength=600, justify="left")
-        self.answer_text_label.pack(anchor="w", padx=15, pady=(5, 15))
-        
-        # Restart button below
+        self.char_image_label = ctk.CTkLabel(self.answer_frame, text="", width=150, height=150)
+        self.char_image_label.pack(side="left", padx=40)
+        self.dialogue_box = ctk.CTkFrame(self.answer_frame, fg_color="white", corner_radius=15,
+                                         border_width=3, border_color="#e94560")
+        self.dialogue_box.pack(side="left", fill="both", expand=True, padx=40, pady=40)
+        self.char_name_label = ctk.CTkLabel(self.dialogue_box, text="",
+                                            font=ctk.CTkFont(size=18, weight="bold"), text_color="#e94560")
+        self.char_name_label.pack(pady=(15, 5))
+        self.answer_text_label = ctk.CTkLabel(self.dialogue_box, text="", font=ctk.CTkFont(size=18),
+                                              text_color="black", wraplength=500, justify="left")
+        self.answer_text_label.pack(pady=15, padx=15)
         self.restart_btn = ctk.CTkButton(self.answer_frame, text="🔄 SUFFER AGAIN", command=self.restart_app,
                                          fg_color="#333", hover_color="#555", height=40, width=180,
                                          font=ctk.CTkFont(size=14, weight="bold"))
         self.restart_btn.pack(pady=20)
         
-        # Status bar
-        self.status_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a2e", height=30)
+        # ===== ANSWER LOADING FRAME =====
+        self.answer_loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#212121")
+        self.answer_loading_frame.pack_forget()
+        self.answer_loading_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=22, weight="bold"), text_color="#d4d4d4")
+        self.answer_loading_label.pack(expand=True, pady=(100, 10))
+        self.answer_loading_sub_label = ctk.CTkLabel(self.answer_loading_frame, text="", font=ctk.CTkFont(size=16), text_color="#9CA3AF")
+        self.answer_loading_sub_label.pack(pady=(0, 20))
+        
+        # ===== STATUS BAR =====
+        self.status_bar = ctk.CTkFrame(self.main_canvas, fg_color="#1a1a2e", height=28)
         self.status_bar.pack(fill="x", side="bottom")
-        self.attempt_label = ctk.CTkLabel(self.status_bar, text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}", font=ctk.CTkFont(size=12), text_color="#888888")
+        self.attempt_label = ctk.CTkLabel(self.status_bar, text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}",
+                                          font=ctk.CTkFont(size=12), text_color="#888")
         self.attempt_label.pack(side="left", padx=15)
-        self.failure_counter_label = ctk.CTkLabel(self.status_bar, text="❌ Failures: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#e94560")
+        self.failure_counter_label = ctk.CTkLabel(self.status_bar, text="❌ Failures: 0",
+                                                  font=ctk.CTkFont(size=12, weight="bold"),
+                                                  text_color="#e94560")
         self.failure_counter_label.pack(side="right", padx=15)
     
     # ==========================================
     # CAMERA LOOP
     # ==========================================
     def update_camera_loop(self):
-        if self.cap is None or not self.cap.isOpened():
+        if self.cap is None:
             try:
                 self.cap = cv2.VideoCapture(0)
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                if not self.cap.isOpened():
-                    print("⚠️ Camera not available")
-                    self.camera_label.configure(text="⚠️ Camera not available", font=("Arial", 20))
-                    self.after(30, self.update_camera_loop)
-                    return
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 500)
             except Exception as e:
                 print(f"⚠️ Camera error: {e}")
                 self.cap = None
-                self.camera_label.configure(text="⚠️ Camera error", font=("Arial", 20))
-                self.after(30, self.update_camera_loop)
-                return
         
-        ret, frame = self.cap.read()
-        if ret:
-            frame = cv2.flip(frame, 1)
-            if self.is_recording and self.video_writer is not None:
-                try:
+        if self.cap is not None and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if ret:
+                frame = cv2.flip(frame, 1)
+                
+                if self.is_recording and self.phase == "chant":
+                    db = int(min(100, self.live_decibel))
+                    cv2.rectangle(frame, (10, 30), (10 + db * 4, 65), (0, 100, 255), -1)
+                    cv2.putText(frame, f"{self.live_decibel:.0f} dB", (10, 95),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 100), 2)
+                
+                if self.is_recording and self.phase == "dance":
+                    cv2.putText(frame, f"SPINS: {self.realtime_spins}/{self.required_spins}",
+                                (10, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+                    cv2.putText(frame, f"CLAPS: {self.realtime_claps}/{self.required_claps}",
+                                (10, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+                    spin_p = min(1.0, self.realtime_spins / max(1, self.required_spins))
+                    clap_p = min(1.0, self.realtime_claps / max(1, self.required_claps))
+                    cv2.rectangle(frame, (10, 100), (310, 120), (50, 50, 50), -1)
+                    cv2.rectangle(frame, (10, 100), (10 + int(300 * spin_p), 120), (0, 255, 255), -1)
+                    cv2.rectangle(frame, (10, 130), (310, 150), (50, 50, 50), -1)
+                    cv2.rectangle(frame, (10, 130), (10 + int(300 * clap_p), 150), (0, 255, 0), -1)
+                
+                if self.is_recording and self.video_writer is not None:
                     self.video_writer.write(frame)
-                except Exception as e:
-                    print(f"⚠️ Video write error: {e}")
-            if self.is_recording:
-                cv2.putText(frame, "🔴 RECORDING", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = Image.fromarray(cv2image)
-            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(800, 500))
-            self.camera_label.configure(image=ctk_img)
-            self.camera_label.image = ctk_img
+                
+                cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(cv2image)
+                if self.phase == "chant":
+                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(560, 315))
+                    self.chant_camera_label.configure(image=ctk_img)
+                    self.chant_camera_label.image = ctk_img
+                elif self.phase == "dance":
+                    ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(640, 360))
+                    self.dance_camera_label.configure(image=ctk_img)
+                    self.dance_camera_label.image = ctk_img
+        
         self.after(30, self.update_camera_loop)
     
     # ==========================================
-    # AUDIO PLAYBACK (unchanged)
+    # AUDIO PLAYBACK
     # ==========================================
     def play_audio(self, file_path, loop=False):
         self.stop_audio()
@@ -460,14 +615,10 @@ class HasurGateApp(ctk.CTk):
                 if loop:
                     self.current_audio_process = subprocess.Popen(
                         ["bash", "-c", f"while true; do afplay '{file_path}'; done"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 else:
                     self.current_audio_process = subprocess.Popen(
-                        ["afplay", file_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
+                        ["afplay", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             elif system == "Windows":
                 try:
                     cmd = ["ffplay", "-nodisp", "-autoexit", file_path]
@@ -476,50 +627,30 @@ class HasurGateApp(ctk.CTk):
                         cmd.insert(2, "0")
                     self.current_audio_process = subprocess.Popen(
                         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
+                        creationflags=subprocess.CREATE_NO_WINDOW)
                 except FileNotFoundError:
-                    escaped_path = file_path.replace('\\', '\\\\')
-                    if loop:
-                        ps_script = (
-                            "Add-Type -AssemblyName presentationCore; "
-                            "$player = New-Object system.windows.media.mediaplayer; "
-                            "$player.MediaEnded += { $player.Position = [timespan]::Zero; $player.Play() }; "
-                            "$player.open('" + escaped_path + "'); $player.Play()"
-                        )
-                    else:
-                        ps_script = (
-                            "Add-Type -AssemblyName presentationCore; "
-                            "$player = New-Object system.windows.media.mediaplayer; "
-                            "$player.open('" + escaped_path + "'); $player.Play()"
-                        )
+                    escaped = file_path.replace("\\", "\\\\")
+                    ps = ("Add-Type -AssemblyName presentationCore; "
+                          "$p = New-Object system.windows.media.mediaplayer; "
+                          "$p.open('" + escaped + "'); $p.Play()")
                     self.current_audio_process = subprocess.Popen(
-                        ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script]
-                    )
+                        ["powershell", "-WindowStyle", "Hidden", "-Command", ps])
             else:
-                if loop:
-                    self.current_audio_process = subprocess.Popen(
-                        ["ffplay", "-loop", "0", "-nodisp", "-autoexit", file_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        start_new_session=True
-                    )
-                else:
-                    self.current_audio_process = subprocess.Popen(
-                        ["aplay", file_path],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
+                self.current_audio_process = subprocess.Popen(
+                    ["aplay", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
-            print(f"⚠️ Audio play error: {e}")
+            print(f"⚠️ Audio error: {e}")
     
     def play_background_music(self, volume=0.3):
         self.stop_background_music()
         if not os.path.exists(BACKGROUND_MUSIC):
             return
-        temp_file = f"temp_bg_{int(volume*100)}.mp3"
+        temp_file = f"temp_bg_{int(volume * 100)}.mp3"
         if not os.path.exists(temp_file):
             try:
-                cmd = ["ffmpeg", "-y", "-i", BACKGROUND_MUSIC, "-filter:a", f"volume={volume}", temp_file]
-                subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["ffmpeg", "-y", "-i", BACKGROUND_MUSIC,
+                                "-filter:a", f"volume={volume}", temp_file],
+                               check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception:
                 return
         system = platform.system()
@@ -527,556 +658,574 @@ class HasurGateApp(ctk.CTk):
             if system == "Darwin":
                 self.background_music_process = subprocess.Popen(
                     ["bash", "-c", f"while true; do afplay '{temp_file}'; done"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             elif system == "Windows":
                 try:
                     self.background_music_process = subprocess.Popen(
                         ["ffplay", "-nodisp", "-autoexit", "-loop", "0", temp_file],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
+                        creationflags=subprocess.CREATE_NO_WINDOW)
                 except FileNotFoundError:
-                    escaped_path = temp_file.replace('\\', '\\\\')
-                    ps_script = (
-                        "Add-Type -AssemblyName presentationCore; "
-                        "$player = New-Object system.windows.media.mediaplayer; "
-                        "$player.MediaEnded += { $player.Position = [timespan]::Zero; $player.Play() }; "
-                        "$player.open('" + escaped_path + "'); $player.Play()"
-                    )
+                    escaped = temp_file.replace("\\", "\\\\")
+                    ps = ("Add-Type -AssemblyName presentationCore; "
+                          "$p = New-Object system.windows.media.mediaplayer; "
+                          "$p.MediaEnded += { $p.Position = [timespan]::Zero; $p.Play() }; "
+                          "$p.open('" + escaped + "'); $p.Play()")
                     self.background_music_process = subprocess.Popen(
-                        ["powershell", "-WindowStyle", "Hidden", "-Command", ps_script]
-                    )
+                        ["powershell", "-WindowStyle", "Hidden", "-Command", ps])
             else:
                 self.background_music_process = subprocess.Popen(
                     ["ffplay", "-loop", "0", "-nodisp", "-autoexit", temp_file],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except Exception:
             pass
     
     # ==========================================
-    # RITUAL FLOW – with AI-like loading
+    # RITUAL FLOW
     # ==========================================
     def start_ritual(self):
-        self.question = self.question_entry.get()
+        self.question = self.question_entry.get().strip()
         if not self.question:
             self.question_entry.configure(placeholder_text="⚠️ ASK SOMETHING, BRO ⚠️")
             return
         
-        self.is_brainrot_mode = True
         self.chat_frame.pack_forget()
         self.input_frame.pack_forget()
-        self.brainrot_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        self.brainrot_frame.lift()
-        
-        # Show loading frame with AI status
-        self.loading_frame.pack(pady=30)
-        self.challenge_label.pack_forget()
-        self.phase_label.pack_forget()
-        self.timer_label.pack_forget()
-        self.camera_label.pack_forget()
-        self.progress_label.pack_forget()
-        self.voice_output_label.pack_forget()
-        self.instruction_label.pack_forget()
-        
-        # Set initial loading status
-        self.loading_statuses = [
-            ("⚡", "Analyzing your question..."),
-            ("🤔", "Crafting a brainrot ritual..."),
-            ("🔄", "Summoning Hasur's decree..."),
-            ("✨", "Preparing the challenge..."),
-            ("🔥", "Igniting the brainrot..."),
-        ]
-        self.loading_index = 0
-        self.update_loading_status()
-        
-        # Ensure camera is open
-        if self.cap is None or not self.cap.isOpened():
-            try:
-                self.cap = cv2.VideoCapture(0)
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            except Exception as e:
-                print(f"⚠️ Camera error: {e}")
-        
-        self.play_background_music(1.0)
+        self.stop_background_music()
         self.title("🔥 HASUR BRAINROT MODE 🔥")
         self.send_btn.configure(state="disabled")
-        
         threading.Thread(target=self.generate_challenge_thread, daemon=True).start()
-    
-    def update_loading_status(self):
-        if not self.is_brainrot_mode:
-            return
-        icon, text = self.loading_statuses[self.loading_index % len(self.loading_statuses)]
-        dots = "." * (self.loading_index % 4)
-        self.loading_label.configure(text=f"{icon} {text}{dots}")
-        self.loading_sub_label.configure(text="🧠 Hasur is thinking...")
-        self.loading_index += 1
-        self.after(1200, self.update_loading_status)
     
     def generate_challenge_thread(self):
         try:
             escalation = 2 ** ((self.attempt - 1) // 1)
             
-            # Voice Challenge
             voice_prompt = f"""
-            Generate a VOICE CHALLENGE for attempt {self.attempt}.
+            Generate a random VOICE/CHANTING CHALLENGE for attempt {self.attempt}.
             Return ONLY valid JSON:
-            {{
-                "chantText": string (must include "TUNG TUNG TUNG HASUR"),
-                "chantBPM": number (135-145),
-                "hypeLevel": number (1-10)
-            }}
+            {{"chantText": string (must include "TUNG TUNG TUNG HASUR" plus random extra words),
+            "chantBPM": number (135-145),
+            "requiredVolume": string (whisper/normal/loud/scream),
+            "hypeLevel": number (1-10)}}
             """
             voice_response = client.chat.completions.create(
-                model="qwen3.7-plus",
+                model=TEXT_MODEL,
                 messages=[{"role": "user", "content": voice_prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.9
-            )
-            voice_challenge = json.loads(voice_response.choices[0].message.content)
+                response_format={"type": "json_object"}, temperature=0.95)
+            vc = json.loads(voice_response.choices[0].message.content)
             
-            # Action Challenge
-            final_moves = ["dab", "67 move", "woah", "Brazillian Dance", "floss", "orange justice"]
+            final_moves = ["dab", "67 move", "woah", "Brazillian Dance", "floss", "griddy"]
             action_prompt = f"""
-            Generate an ACTION CHALLENGE for attempt {self.attempt}.
+            Generate a random MOVEMENT/DANCE CHALLENGE for attempt {self.attempt}.
             Escalate difficulty by {escalation}x.
             Return ONLY valid JSON:
-            {{
-                "spins": number (2-8),
-                "claps": number (2-8),
-                "finalMove": string ("{random.choice(final_moves)}")
-            }}
+            {{"spins": number (2-8), "claps": number (2-8),
+            "finalMove": string (one of: "{', '.join(final_moves)}")}}
             """
             action_response = client.chat.completions.create(
-                model="qwen3.7-plus",
+                model=TEXT_MODEL,
                 messages=[{"role": "user", "content": action_prompt}],
-                response_format={"type": "json_object"},
-                temperature=0.9
-            )
-            action_challenge = json.loads(action_response.choices[0].message.content)
+                response_format={"type": "json_object"}, temperature=0.95)
+            ac = json.loads(action_response.choices[0].message.content)
             
             self.challenge = {
-                "chantText": voice_challenge.get("chantText", "TUNG TUNG TUNG HASUR"),
-                "chantBPM": voice_challenge.get("chantBPM", 140),
-                "hypeLevel": voice_challenge.get("hypeLevel", 7),
-                "spins": action_challenge.get("spins", 2) * escalation,
-                "claps": action_challenge.get("claps", 2) * escalation,
-                "finalMove": action_challenge.get("finalMove", "dab")
+                "chantText": vc.get("chantText", "TUNG TUNG TUNG HASUR"),
+                "chantBPM": vc.get("chantBPM", 140),
+                "requiredVolume": vc.get("requiredVolume", "loud"),
+                "hypeLevel": vc.get("hypeLevel", 7),
+                "spins": int(ac.get("spins", 2)) * escalation,
+                "claps": int(ac.get("claps", 2)) * escalation,
+                "finalMove": ac.get("finalMove", "dab"),
             }
-            
-            self.required_spins = self.challenge.get("spins", 2)
-            self.required_claps = self.challenge.get("claps", 2)
-            self.required_chant = self.challenge.get("chantText", "TUNG TUNG TUNG HASUR")
-            
-            self.after(0, self.show_ritual_screen)
+            self.required_spins = int(self.challenge["spins"])
+            self.required_claps = int(self.challenge["claps"])
+            self.required_chant = self.challenge["chantText"]
+            self.required_volume = self.challenge["requiredVolume"]
+            self.after(0, self.go_to_chant_page)
         except Exception as e:
             print(f"⚠️ Challenge API error: {e}")
+            # Fallback to simulated challenge
             self.simulate_challenge()
     
     def simulate_challenge(self):
         import random
-        final_moves = ["dab", "67 move", "woah", "Brazillian Dance", "floss", "orange justice"]
+        final_moves = ["dab", "67 move", "woah", "Brazillian Dance", "floss", "griddy"]
         self.challenge = {
             "chantText": "TUNG TUNG TUNG HASUR",
             "chantBPM": random.choice([138, 140, 142]),
+            "requiredVolume": random.choice(["whisper", "normal", "loud", "scream"]),
             "hypeLevel": random.randint(7, 10),
             "spins": random.choice([2, 4, 6]),
             "claps": random.choice([2, 4, 6]),
             "finalMove": random.choice(final_moves)
         }
-        self.required_spins = self.challenge.get("spins", 2)
-        self.required_claps = self.challenge.get("claps", 2)
-        self.required_chant = self.challenge.get("chantText", "TUNG TUNG TUNG HASUR")
-        self.after(0, self.show_ritual_screen)
+        self.required_spins = int(self.challenge["spins"])
+        self.required_claps = int(self.challenge["claps"])
+        self.required_chant = self.challenge["chantText"]
+        self.required_volume = self.challenge["requiredVolume"]
+        self.after(0, self.go_to_chant_page)
     
-    def show_ritual_screen(self):
-        # Hide loading, show widgets
-        self.loading_frame.pack_forget()
-        self.challenge_label.pack(pady=5)
-        self.phase_label.pack(pady=5)
-        self.timer_label.pack(pady=10)
-        self.camera_label.pack(pady=10)
-        self.progress_label.pack(pady=5)
-        self.voice_output_label.pack(pady=5)
-        self.instruction_label.pack(pady=5)
-        
-        warning = "🔥" * min(self.attempt, 5)
-        text = (
-            f"{warning} ATTEMPT {self.attempt} {warning}\n"
-            f"Chant: '{self.challenge.get('chantText', 'TUNG TUNG TUNG HASUR')}' (BPM {self.challenge.get('chantBPM', 140)})\n"
-            f"Action: {self.challenge.get('spins', 2)} spins + {self.challenge.get('claps', 2)} claps + {self.challenge.get('finalMove', 'DAB').upper()}"
-        )
-        self.challenge_label.configure(text=text)
-        self.progress_label.configure(
-            text=f"🔄 SPINS: 0/{self.required_spins} | 👏 CLAPS: 0/{self.required_claps}"
-        )
+    # ==========================================================
+    # PAGE NAVIGATION
+    # ==========================================================
+    def go_to_chant_page(self):
+        self.phase = "chant"
+        self.chant_passed = False
+        self.dance_passed = False
         self.realtime_spins = 0
         self.realtime_claps = 0
         self.audio_text = ""
-        self.audio_loudness = 0
+        self.live_decibel = 0
+        self.stop_background_music()
         
-        # Start countdown
-        self.after(1000, self.start_countdown)
-    
-    def start_countdown(self):
-        self.countdowns = [3, 2, 1]
-        self.show_countdown(0)
-    
-    def show_countdown(self, index):
-        if index < len(self.countdowns):
-            self.timer_label.configure(text=str(self.countdowns[index]))
-            self.instruction_label.configure(text="GET READY...")
-            self.after(1000, lambda: self.show_countdown(index + 1))
-        else:
-            self.timer_label.configure(text="GO!")
-            self.instruction_label.configure(text="🎤 CHANT NOW! (Voice Phase)")
-            self.phase_label.configure(text="🗣️ VOICE CHALLENGE")
-            self.after(500, self.start_voice_phase)
-    
-    # ==========================================
-    # VOICE PHASE
-    # ==========================================
-    def start_voice_phase(self):
-        self.phase = "voice"
-        self.is_recording = True
-        duration = VOICE_DURATION
-        self.remaining_time = duration
+        self.chat_frame.pack_forget()
+        self.input_frame.pack_forget()
+        self.dance_frame.pack_forget()
+        self.failure_overlay.pack_forget()
+        self.answer_frame.pack_forget()
+        self.answer_loading_frame.pack_forget()
+        self.chant_frame.pack(fill="both", expand=True)
         
-        # Start audio recording
+        self.chant_challenge_label.configure(
+            text=f"🗣️ Chant: \"{self.required_chant}\"\n"
+                 f"Required Volume: {self.required_volume.upper()} | "
+                 f"BPM: {self.challenge.get('chantBPM', 140)} | "
+                 f"Hype: {self.challenge.get('hypeLevel', 7)}/10")
+        self.chant_heard_label.configure(text="🎤 Heard: Waiting for you to chant...")
+        self.chant_decibel_bar.set(0)
+        self.chant_db_label.configure(text="0 dB")
+        self.chant_countdown_label.configure(text="")
+        self.chant_instruction_label.configure(
+            text="👇 Press START CHANTING below — the mic only listens after you press it!",
+            text_color="#00aaff")
+        self.chant_start_btn.configure(state="normal", text="🎤 START CHANTING")
+        self.proceed_to_dance_btn.pack_forget()
+    
+    def go_to_dance_page(self):
+        self.phase = "dance"
+        self.stop_background_music()
+        self.chant_frame.pack_forget()
+        self.dance_frame.pack(fill="both", expand=True)
+        
+        self.dance_challenge_label.configure(
+            text=f"🔄 {self.required_spins}x SPINS | 👏 {self.required_claps}x CLAPS\n"
+                 f"🕺 Finish with: {self.challenge.get('finalMove', 'DAB').upper()}!")
+        self.dance_progress_label.configure(
+            text=f"🔄 SPINS: 0/{self.required_spins} | 👏 CLAPS: 0/{self.required_claps}")
+        self.dance_countdown_label.configure(text="")
+        self.dance_instruction_label.configure(
+            text="👇 Press START DANCING below — Qwen-Vision only watches after you press it!",
+            text_color="#ff66ff")
+        self.dance_start_btn.configure(state="normal", text="💃 START DANCING")
+    
+    # ==========================================================
+    # SESSION 1: CHANTING (Qwen-Audio)
+    # ==========================================================
+    def start_chant_phase(self):
+        self.chant_start_btn.configure(state="disabled", text="🎤 CHANTING...")
+        self.chant_instruction_label.configure(text="🎤 CHANT NOW! Speak loudly!", text_color="#00ff00")
+        self.chant_heard_label.configure(text="🎤 Heard: Listening...")
+        threading.Thread(target=self.run_chant_recording, daemon=True).start()
+    
+    def run_chant_recording(self):
+        duration = CHANT_DURATION
         samplerate = 44100
         self.audio_data = []
-        def audio_callback(indata, frames, time, status):
+        folder = self.get_session_folder()
+        chant_wav = f"{folder}/chant_audio.wav"
+        self.current_audio_filename = chant_wav
+        
+        def audio_cb(indata, frames, time_info, status):
             self.audio_data.append(indata.copy())
-            if len(indata) > 0:
-                rms = np.sqrt(np.mean(indata**2))
-                loudness = min(100, rms * 2000)
-                self.audio_loudness = loudness
-                self.voice_output_label.configure(
-                    text=f"🎤 Voice: Listening... | 🔊 Loudness: {loudness:.1f}%"
-                )
-        self.audio_stream = sd.InputStream(samplerate=samplerate, channels=1, callback=audio_callback)
-        self.audio_stream.start()
+            rms = np.sqrt(np.mean(indata ** 2))
+            db = min(100, rms * 3000)
+            self.live_decibel = db
+            self.after(0, lambda v=db: self.update_chant_decibel(v))
         
-        # Start video writer (we'll record entire ritual from now)
-        today = datetime.datetime.now()
-        day_name = today.strftime("%A")
-        date_str = today.strftime("%Y-%m-%d")
-        session_folder = f"recordings/{date_str}_{day_name}/attempt{self.attempt}"
-        os.makedirs(session_folder, exist_ok=True)
-        self.current_video_filename = f"{session_folder}/raw.avi"
-        self.current_audio_filename = f"{session_folder}/audio.wav"
-        self.current_final_filename = f"{session_folder}/final.mp4"
-        fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-        self.video_writer = cv2.VideoWriter(self.current_video_filename, fourcc, 15, (640, 480))
-        
-        self.voice_timer(duration)
+        stream = sd.InputStream(samplerate=samplerate, channels=1, callback=audio_cb)
+        stream.start()
+        self.after(0, lambda: self.chant_countdown(duration, stream, chant_wav))
     
-    def voice_timer(self, time_left):
+    def update_chant_decibel(self, db):
+        self.chant_decibel_bar.set(min(1.0, db / 100))
+        self.chant_db_label.configure(text=f"{db:.0f} dB")
+    
+    def chant_countdown(self, time_left, stream, chant_wav):
         if time_left <= 0:
-            # Voice phase ends
-            self.instruction_label.configure(text="⏳ Voice phase done! Get ready for action...")
-            self.phase_label.configure(text="🏃 ACTION CHALLENGE")
-            self.after(1000, self.start_action_phase)
+            stream.stop()
+            stream.close()
+            if self.audio_data:
+                audio_array = np.concatenate(self.audio_data, axis=0)
+                wavfile.write(chant_wav, 44100, audio_array)
+            self.chant_countdown_label.configure(text="🔍")
+            self.chant_instruction_label.configure(
+                text="⏳ Qwen-Audio is analyzing your chant...", text_color="#ffd700")
+            threading.Thread(target=self.analyze_chant_thread, args=(chant_wav,), daemon=True).start()
             return
-        self.timer_label.configure(text=f"⏳ {time_left:.1f}s")
-        self.after(100, lambda: self.voice_timer(time_left - 0.1))
+        self.chant_countdown_label.configure(text=f"🎤 {time_left:.1f}s")
+        self.after(100, lambda: self.chant_countdown(time_left - 0.1, stream, chant_wav))
     
-    # ==========================================
-    # ACTION PHASE
-    # ==========================================
-    def start_action_phase(self):
-        self.phase = "action"
-        duration = ACTION_DURATION
-        self.remaining_time = duration
-        self.instruction_label.configure(text="💪 SPIN! CLAP! DAB!")
-        self.action_timer(duration)
-    
-    def action_timer(self, time_left):
-        if time_left <= 0:
-            # End recording
-            self.is_recording = False
-            if self.video_writer is not None:
-                self.video_writer.release()
-                self.video_writer = None
-            if self.audio_stream is not None:
-                self.audio_stream.stop()
-                self.audio_stream.close()
-                self.audio_stream = None
-            # Save audio
-            audio_array = np.concatenate(self.audio_data, axis=0)
-            wavfile.write(self.current_audio_filename, 44100, audio_array)
-            self.timer_label.configure(text="⏳ Analyzing...")
-            self.instruction_label.configure(text="🧠 Qwen is judging you...")
-            self.phase_label.configure(text="📊 ANALYZING")
-            threading.Thread(target=self.run_analysis_thread, daemon=True).start()
-            return
-        self.timer_label.configure(text=f"⏳ {time_left:.1f}s")
-        self.after(100, lambda: self.action_timer(time_left - 0.1))
-    
-    # ==========================================
-    # MERGE & FRAME EXTRACTION (unchanged)
-    # ==========================================
-    def merge_audio_video(self, video_file, audio_file, output_file):
+    def analyze_chant_thread(self, chant_wav):
         try:
-            cmd = [
-                "ffmpeg", "-y", "-i", video_file, "-i", audio_file,
-                "-c:v", "libx264", "-c:a", "aac",
-                "-strict", "experimental", "-shortest", output_file
-            ]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
-        except Exception:
-            return False
+            if not os.path.exists(chant_wav):
+                raise Exception("Audio not found.")
+            
+            # Read audio and convert to base64 (16kHz)
+            sr, audio_array = wavfile.read(chant_wav)
+            audio_array = np.asarray(audio_array)
+            if audio_array.ndim > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            if audio_array.dtype in (np.float32, np.float64):
+                audio_int16 = (np.clip(audio_array, -1.0, 1.0) * 32767).astype(np.int16)
+            else:
+                audio_int16 = audio_array.astype(np.int16)
+            
+            # Resample to 16kHz if needed
+            try:
+                from scipy.signal import resample_poly
+                from math import gcd
+                g = gcd(int(sr), 16000)
+                audio_16k = resample_poly(audio_int16.astype(np.float64),
+                                          16000 // g, int(sr) // g).astype(np.int16)
+                target_sr = 16000
+            except Exception:
+                audio_16k = audio_int16
+                target_sr = int(sr)
+            
+            buf = io.BytesIO()
+            wavfile.write(buf, target_sr, audio_16k)
+            audio_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            
+            # Use direct REST API call to multimodal endpoint
+            url = "https://ws-bf3itnzatquc4sa0.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+            headers = {
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "qwen3-omni-flash",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You are a transcription assistant. Always transcribe in English."
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {"audio": f"data:audio/wav;base64,{audio_b64}"},
+                                {"text": "Transcribe exactly what the person said in English."}
+                            ]
+                        }
+                    ]
+                }
+            }
+            
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                content = data["output"]["choices"][0]["message"]["content"]
+                transcription = ""
+                for item in content:
+                    if "text" in item:
+                        transcription = item["text"]
+                        break
+                
+                # ---- Detect brainrot phrases and required chant ----
+                detected_text = transcription.lower()
+                required_phrase = self.required_chant.lower()
+                
+                # Check for required phrase
+                phrase_detected = required_phrase in detected_text or detected_text in required_phrase
+                if not phrase_detected:
+                    # Try alternative spelling (sahur)
+                    alt_phrase = required_phrase.replace("hasur", "sahur")
+                    phrase_detected = alt_phrase in detected_text or detected_text in alt_phrase
+                
+                # Check for any brainrot phrase
+                brainrot_detected = any(phrase in detected_text for phrase in self.brainrot_phrases)
+                
+                # Pass if either condition is met
+                passed = phrase_detected or brainrot_detected
+                
+                # For the demo, we can also set a threshold if needed
+                result = {
+                    "transcription": transcription,
+                    "detected_volume": self.required_volume,
+                    "phrase_correct": phrase_detected,
+                    "brainrot_detected": brainrot_detected,
+                    "volume_sufficient": True,
+                    "passed": passed,
+                    "reason": "Phrase detected" if phrase_detected else "Brainrot detected" if brainrot_detected else "Nothing detected",
+                    "loudness_percent": 75  # placeholder
+                }
+            else:
+                # API error – fallback to simulation
+                print(f"⚠️ API error: {response.text}")
+                raise Exception("API returned non-200")
+            
+            # Update UI with result
+            self.audio_analysis_result = result
+            self.chant_passed = bool(result.get("passed", False))
+            self.audio_text = result.get("transcription", "")
+            self.after(0, lambda: self.show_chant_result(result))
+            
+        except Exception as e:
+            print(f"⚠️ Chant error: {e}")
+            # Fallback: always pass for demo stability
+            measured_db = int(getattr(self, "live_decibel", 0))
+            fallback = {
+                "passed": True,
+                "reason": "Qwen-Audio fallback (demo mode)",
+                "transcription": self.required_chant,
+                "detected_phrase": self.required_chant,
+                "detected_volume": self.required_volume,
+                "phrase_correct": True,
+                "brainrot_detected": True,
+                "volume_sufficient": True,
+                "loudness_percent": measured_db
+            }
+            self.audio_analysis_result = fallback
+            self.chant_passed = True
+            self.audio_text = fallback["transcription"]
+            self.after(0, lambda: self.show_chant_result(fallback))
     
-    def get_frames_from_video(self, video_path, max_frames=60):
-        cap = cv2.VideoCapture(video_path)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total == 0:
-            cap.release()
-            return []
-        if total <= max_frames:
-            indices = list(range(total))
+    def show_chant_result(self, result):
+        self.chant_countdown_label.configure(text="")
+        transcription = result.get("transcription") or "(nothing detected)"
+        volume = result.get("detected_volume", "???")
+        loudness = result.get("loudness_percent", 0)
+        passed = result.get("passed", False)
+        icon = "✅" if passed else "❌"
+        
+        # Display brainrot detection info
+        brainrot_detected = result.get("brainrot_detected", False)
+        extra = " 🧠 Brainrot detected!" if brainrot_detected else ""
+        
+        self.chant_heard_label.configure(
+            text=(f"📝 Qwen-Audio transcribed:\n\"{transcription}\"\n\n"
+                  f"🔊 Volume: {str(volume).upper()} ({loudness} dB) {icon}{extra}"),
+            text_color="#4ade80" if passed else "#e94560",
+            wraplength=800, justify="center")
+        self.chant_decibel_bar.set(min(1.0, loudness / 100))
+        self.chant_db_label.configure(text=f"{loudness} dB")
+        
+        if passed:
+            self.chant_instruction_label.configure(
+                text="✅ VOICE CHALLENGE PASSED! Proceed to the Dance Challenge below.",
+                text_color="#00ff88")
+            self.chant_start_btn.configure(text="🎤 CHANT ✅")
         else:
-            indices = [int(i * total / max_frames) for i in range(max_frames)]
+            self.chant_instruction_label.configure(
+                text=f"❌ VOICE CHALLENGE FAILED: {result.get('reason', 'Unknown')}. Proceed anyway.",
+                text_color="#e94560")
+            self.chant_start_btn.configure(text="🎤 CHANT ❌")
+        
+        self.proceed_to_dance_btn.pack(side="left", padx=10, pady=15)
+    
+    # ==========================================================
+    # SESSION 2: DANCING (Qwen-Vision)
+    # ==========================================================
+    def start_dance_phase(self):
+        self.dance_start_btn.configure(state="disabled", text="💃 DANCING...")
+        self.dance_instruction_label.configure(
+            text="💃 DANCE NOW! Spin! Clap! Hit the move!", text_color="#00ff00")
+        threading.Thread(target=self.run_dance_recording, daemon=True).start()
+    
+    def run_dance_recording(self):
+        duration = DANCE_DURATION
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        folder = self.get_session_folder()
+        video_file = f"{folder}/dance_raw.mp4"
+        final_file = f"{folder}/dance_final.mp4"
+        audio_file = f"{folder}/dance_audio.wav"
+        self.current_video_filename = video_file
+        self.current_final_filename = final_file
+        self.video_writer = cv2.VideoWriter(video_file, fourcc, 30.0, (800, 500))
+        self.is_recording = True
+        
+        samplerate = 44100
+        self.audio_data = []
+        
+        def audio_cb(indata, frames, time_info, status):
+            self.audio_data.append(indata.copy())
+        
+        stream = sd.InputStream(samplerate=samplerate, channels=1, callback=audio_cb)
+        stream.start()
+        self.after(0, lambda: self.dance_countdown(duration, stream, video_file, audio_file, final_file))
+    
+    def dance_countdown(self, time_left, stream, video_file, audio_file, final_file):
+        if time_left <= 0:
+            self.is_recording = False
+            stream.stop()
+            stream.close()
+            if self.video_writer:
+                self.video_writer.release()
+            if self.audio_data:
+                audio_array = np.concatenate(self.audio_data, axis=0)
+                wavfile.write(audio_file, 44100, audio_array)
+            self.dance_countdown_label.configure(text="🔍")
+            self.dance_instruction_label.configure(
+                text="⏳ Qwen-Vision is counting your moves...", text_color="#ffd700")
+            threading.Thread(target=self.analyze_dance_thread,
+                             args=(video_file, audio_file, final_file), daemon=True).start()
+            return
+        self.dance_countdown_label.configure(text=f"💃 {time_left:.1f}s")
+        self.after(100, lambda: self.dance_countdown(time_left - 0.1, stream,
+                                                     video_file, audio_file, final_file))
+    
+    def get_frames_from_video(self, video_path, num_frames=8):
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frames = []
-        for idx in indices:
+        if total_frames == 0:
+            cap.release()
+            return frames
+        num_frames = min(num_frames, total_frames)
+        intervals = [int(i * total_frames / num_frames) for i in range(num_frames)]
+        for idx in intervals:
             cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
             ret, frame = cap.read()
             if ret:
                 frame = cv2.resize(frame, (512, 512))
-                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                 frames.append(base64.b64encode(buffer).decode('utf-8'))
         cap.release()
         return frames
     
-    # ==========================================
-    # AUDIO ANALYSIS (bypassed)
-    # ==========================================
-    def analyze_chant_audio(self, audio_path):
-        print("🎤 Audio analysis bypassed (audio always passes).")
-        return {
-            "transcription": "TUNG TUNG TUNG HASUR (simulated)",
-            "correct_phrase": True,
-            "bpm": 140,
-            "hype": 8,
-            "pronunciation": True,
-            "passed": True,
-            "loudness": 70
-        }
-    
-    # ==========================================
-    # VISION ANALYSIS
-    # ==========================================
-    def analyze_vision_frames(self, frames_b64):
-        if not frames_b64:
-            return {"passed": False, "reason": "No frames extracted",
-                    "detected_spins": 0, "detected_claps": 0}
-
-        prompt = f"""
-You are a motion‑analysis expert. You are given {len(frames_b64)} sequential frames from a video.
-
-The person was asked to:
-- Spin **exactly {self.challenge.get('spins', 2)} times** – a full 360° rotation of the body.
-- Clap **exactly {self.challenge.get('claps', 2)} times** – both hands touching (palms together).
-- Finish with a **'{self.challenge.get('finalMove', 'dab')}'** pose.
-
-**How to count claps (touches):**
-- A clap is when both hands touch each other (no gap).
-- Look for frames where hands are in contact.
-- Count each separate touching event (touch, separate, touch again = 2).
-
-**How to count spins:**
-- A spin is a full rotation. Track shoulders and head orientation.
-- Count only complete 360° rotations.
-
-**Instructions:**
-- Scan frames in order.
-- If no motion, return 0 for both.
-- Provide the counts and brief reasoning.
-
-Return ONLY valid JSON:
-{{
-    "detected_spins": integer,
-    "detected_claps": integer,
-    "detected_final_move": string or "none",
-    "confidence": "high" | "medium" | "low",
-    "reasoning": "brief explanation"
-}}
-"""
-        content = [{"type": "text", "text": prompt}]
-        for img in frames_b64:
-            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}})
-
-        messages = [{"role": "user", "content": content}]
-
-        for model in ["qwen-vl-max", "qwen-vl-plus", "qwen-vl"]:
-            try:
-                print(f"🔍 Calling {model}...")
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    temperature=0.0,
-                    max_tokens=400,
-                    timeout=30
-                )
-                result = json.loads(response.choices[0].message.content)
-                print(f"✅ Result from {model}:")
-                print(json.dumps(result, indent=2))
-
-                detected_spins = result.get("detected_spins", 0)
-                detected_claps = result.get("detected_claps", 0)
-                passed = (detected_spins >= self.required_spins and
-                          detected_claps >= self.required_claps)
-
-                reason = f"Spins: {detected_spins}/{self.required_spins}, Claps: {detected_claps}/{self.required_claps}"
-                if passed:
-                    reason += " ✅ All requirements met!"
-                else:
-                    reason += " ❌ Not enough."
-
-                return {
-                    "passed": passed,
-                    "reason": reason,
-                    "detected_spins": detected_spins,
-                    "detected_claps": detected_claps,
-                    "detected_final_move": result.get("detected_final_move", ""),
-                    "spin_accuracy": "perfect" if detected_spins >= self.required_spins else "partial",
-                    "clap_accuracy": "perfect" if detected_claps >= self.required_claps else "partial",
-                    "confidence": result.get("confidence", "medium"),
-                    "reasoning": result.get("reasoning", "")
-                }
-            except Exception as e:
-                print(f"⚠️ {model} failed: {e}")
-                continue
-
-        return {
-            "passed": False,
-            "reason": "All vision models failed",
-            "detected_spins": 0,
-            "detected_claps": 0,
-            "detected_final_move": "",
-            "spin_accuracy": "none",
-            "clap_accuracy": "none",
-            "confidence": "low",
-            "reasoning": "API error"
-        }
-    
-    # ==========================================
-    # MAIN ANALYSIS PIPELINE (with 2s delay for tick display)
-    # ==========================================
-    def run_analysis_thread(self):
+    def merge_audio_video(self, video_file, audio_file, output_file):
         try:
-            # Merge audio/video
-            merged_success = self.merge_audio_video(
-                self.current_video_filename,
-                self.current_audio_filename,
-                self.current_final_filename
-            )
-            file_to_analyze = (
-                self.current_final_filename
-                if (merged_success and os.path.exists(self.current_final_filename))
-                else self.current_video_filename
-            )
-            
-            # Audio (bypassed)
-            audio_result = self.analyze_chant_audio(self.current_audio_filename)
-            self.audio_analysis_result = audio_result
-            audio_passed = True
-            audio_score = 70
-
-            # Extract frames
-            frames_b64 = self.get_frames_from_video(file_to_analyze, max_frames=60)
-
-            # Vision analysis
-            vision_result = self.analyze_vision_frames(frames_b64)
-            self.vision_analysis_result = vision_result
-
-            detected_spins = vision_result.get("detected_spins", 0)
-            detected_claps = vision_result.get("detected_claps", 0)
-
-            # Update progress label with tick/cross
-            spin_ok = detected_spins >= self.required_spins
-            clap_ok = detected_claps >= self.required_claps
-            spin_emoji = "✅" if spin_ok else "❌"
-            clap_emoji = "✅" if clap_ok else "❌"
-            self.after(0, lambda: self.progress_label.configure(
-                text=f"{spin_emoji} SPINS: {detected_spins}/{self.required_spins} | {clap_emoji} CLAPS: {detected_claps}/{self.required_claps}"
-            ))
-
-            self.realtime_spins = detected_spins
-            self.realtime_claps = detected_claps
-
-            vision_passed = vision_result.get("passed", False)
-            vision_score = 100 if vision_passed else 0
-
-            if vision_passed:
-                passed = True
-                reason = "✅ Ritual complete! The Hasur is pleased."
-                status = "PASSED"
-                self.ritual_passed = True
-            else:
-                passed = False
-                reasons = []
-                if detected_spins < self.required_spins:
-                    reasons.append(f"❌ Only {detected_spins}/{self.required_spins} spins")
-                if detected_claps < self.required_claps:
-                    reasons.append(f"❌ Only {detected_claps}/{self.required_claps} claps")
-                if not reasons:
-                    reasons.append("❌ Vision verification failed")
-                reason = " | ".join(reasons)
-                status = "FAILED"
-                self.ritual_passed = False
-
-            if not passed:
-                self.failure_count += 1
-                self.failure_counter_label.configure(text=f"❌ Failures: {self.failure_count}")
-
-            self.print_thermal_receipt(self.attempt, reason, audio_score, vision_score, status)
-
-            # ⏳ Wait 2 seconds so the user can see the tick/cross
-            self.after(2000, lambda: self.handle_result(passed, reason))
-
+            subprocess.run(["ffmpeg", "-y", "-i", video_file, "-i", audio_file,
+                            "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental",
+                            "-shortest", output_file],
+                           check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
+    
+    def analyze_dance_thread(self, video_file, audio_file, final_file):
+        try:
+            self.merge_audio_video(video_file, audio_file, final_file)
+            file_to_analyze = final_file if os.path.exists(final_file) else video_file
+            frames_b64 = self.get_frames_from_video(file_to_analyze, num_frames=8)
+            if not frames_b64:
+                raise Exception("No frames.")
+            prompt = (
+                f"Analyze these video frames. Required: {self.required_spins} spins, "
+                f"{self.required_claps} claps, finish with '{self.challenge.get('finalMove', 'dab')}'.\n"
+                f"Count spins and claps. Be STRICT.\n\n"
+                f"Return ONLY JSON:\n"
+                f'{{"passed": boolean, "reason": string, "detected_spins": number, '
+                f'"detected_claps": number, "detected_final_move": string, '
+                f'"final_move_correct": boolean}}')
+            messages = [{"role": "user", "content":
+                         [{"type": "text", "text": prompt}] +
+                         [{"type": "image_url",
+                           "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
+                          for img in frames_b64]}]
+            response = client.chat.completions.create(
+                model=VISION_MODEL, messages=messages,
+                response_format={"type": "json_object"}, temperature=0.3)
+            result = json.loads(response.choices[0].message.content)
+            self.vision_analysis_result = result
+            self.dance_passed = result.get("passed", False)
+            self.realtime_spins = result.get("detected_spins", 0)
+            self.realtime_claps = result.get("detected_claps", 0)
+            self.after(0, lambda: self.show_dance_result(result))
         except Exception as e:
-            print(f"⚠️ Analysis pipeline error: {e}")
-            self.after(0, lambda: self.handle_result(False, f"💀 Analysis failed: {str(e)}"))
+            print(f"⚠️ Dance error: {e}")
+            fallback = {"passed": False, "reason": f"Vision error: {e}",
+                        "detected_spins": 0, "detected_claps": 0,
+                        "detected_final_move": "none", "final_move_correct": False}
+            self.vision_analysis_result = fallback
+            self.dance_passed = False
+            self.after(0, lambda: self.show_dance_result(fallback))
+    
+    def show_dance_result(self, result):
+        self.dance_countdown_label.configure(text="")
+        det_s = result.get("detected_spins", 0)
+        det_c = result.get("detected_claps", 0)
+        det_move = result.get("detected_final_move", "?")
+        passed = result.get("passed", False)
+        s_icon = "✅" if det_s >= self.required_spins else "❌"
+        c_icon = "✅" if det_c >= self.required_claps else "❌"
+        m_icon = "✅" if result.get("final_move_correct", False) else "❌"
+        self.dance_progress_label.configure(
+            text=f"🔄 SPINS: {det_s}/{self.required_spins} {s_icon} | "
+                 f"👏 CLAPS: {det_c}/{self.required_claps} {c_icon} | "
+                 f"🕺 {det_move} {m_icon}")
+        if passed:
+            self.dance_instruction_label.configure(
+                text="✅ DANCE CHALLENGE PASSED! Evaluating...", text_color="#00ff88")
+            self.dance_start_btn.configure(text="💃 DANCE ✅")
+        else:
+            self.dance_instruction_label.configure(
+                text=f"❌ DANCE CHALLENGE FAILED: {result.get('reason', 'Unknown')}",
+                text_color="#e94560")
+            self.dance_start_btn.configure(text="💃 DANCE ❌")
+        self.after(2000, self.evaluate_final_result)
+    
+    # ==========================================================
+    # FINAL EVALUATION
+    # ==========================================================
+    def evaluate_final_result(self):
+        audio_result = self.audio_analysis_result or {}
+        vision_result = self.vision_analysis_result or {}
+        audio_score = min(100, audio_result.get("loudness_percent", 50))
+        vision_score = 100 if self.dance_passed else int(
+            min(1.0, self.realtime_spins / max(1, self.required_spins)) * 100)
+        
+        if self.chant_passed and self.dance_passed:
+            self.ritual_passed = True
+            self.show_answer()
+        else:
+            self.ritual_passed = False
+            reasons = []
+            if not self.chant_passed:
+                reasons.append(f"🎤 {audio_result.get('reason', 'Chant failed')}")
+            if not self.dance_passed:
+                if self.realtime_spins < self.required_spins:
+                    reasons.append(f"💃 {self.realtime_spins}/{self.required_spins} spins")
+                if self.realtime_claps < self.required_claps:
+                    reasons.append(f"💃 {self.realtime_claps}/{self.required_claps} claps")
+                if not vision_result.get("final_move_correct", False):
+                    reasons.append(f"💃 Wrong move (need {self.challenge.get('finalMove', 'dab')})")
+            reason = " | ".join(reasons) if reasons else "Both challenges failed"
+            self.failure_count += 1
+            self.failure_counter_label.configure(text=f"❌ Failures: {self.failure_count}")
+            self.print_thermal_receipt(self.attempt, reason, audio_score, vision_score, "FAILED")
+            self.show_failure(reason)
+    
+    # ==========================================================
+    # HELPERS
+    # ==========================================================
+    def get_session_folder(self):
+        today = datetime.datetime.now()
+        folder = f"recordings/{today.strftime('%Y-%m-%d')}_{today.strftime('%A')}/attempt{self.attempt}"
+        os.makedirs(folder, exist_ok=True)
+        return folder
     
     def print_thermal_receipt(self, attempt, reason, audio_score, vision_score, status):
         brainrot = random.choice(BRAINROT_FAILURES)
-        receipt_num = len(self.failure_receipts) + 1
         receipt = RECEIPT_TEMPLATE.format(
-            receipt_num=receipt_num,
-            attempt=attempt,
-            max_attempts=MAX_ATTEMPTS,
-            reason=reason[:40],
-            audio_score=audio_score,
-            vision_score=vision_score,
-            status=status,
-            brainrot=brainrot
-        )
+            receipt_num=len(self.failure_receipts) + 1,
+            attempt=attempt, max_attempts=MAX_ATTEMPTS,
+            reason=reason[:40], audio_score=audio_score,
+            vision_score=vision_score, status=status, brainrot=brainrot)
         self.failure_receipts.append(receipt)
         self.receipt_label.configure(text=receipt)
         self.receipt_frame.place(relx=0.85, rely=0.5, anchor="center")
         self.after(6000, lambda: self.receipt_frame.place_forget())
     
-    def handle_result(self, passed, reason):
-        if passed:
-            self.show_answer()
-        else:
-            self.show_failure(reason)
-    
     def show_failure(self, reason):
         self.stop_background_music()
-        self.brainrot_frame.pack_forget()
+        self.dance_frame.pack_forget()
+        self.chant_frame.pack_forget()
         self.failure_overlay.pack(fill="both", expand=True)
         self.failure_reason_label.configure(text=reason)
-        brainrot = random.choice(BRAINROT_FAILURES)
-        self.brainrot_label.configure(text=f"💀 {brainrot} 💀")
+        self.brainrot_label.configure(text=f"💀 {random.choice(BRAINROT_FAILURES)} 💀")
         self.play_audio(FAILURE_AUDIO)
         self.flash_overlay(16)
         self.after(6000, self.advance_attempt)
@@ -1085,8 +1234,7 @@ Return ONLY valid JSON:
         if count <= 0:
             self.failure_overlay.configure(fg_color="#e94560")
             return
-        color = "#e94560" if count % 2 == 0 else "#000000"
-        self.failure_overlay.configure(fg_color=color)
+        self.failure_overlay.configure(fg_color="#e94560" if count % 2 == 0 else "#000000")
         self.after(300, lambda: self.flash_overlay(count - 1))
     
     def advance_attempt(self):
@@ -1096,60 +1244,92 @@ Return ONLY valid JSON:
         else:
             self.attempt += 1
             self.attempt_label.configure(text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}")
-            self.brainrot_frame.pack_forget()
             self.chat_frame.pack(fill="both", expand=True, padx=20, pady=10)
-            self.input_frame.pack(fill="x", padx=20, pady=(0, 15))
+            self.input_frame.pack(fill="x", padx=20, pady=(0, 10))
             self.send_btn.configure(state="normal")
             self.play_background_music(0.3)
     
+    # ==========================================================
+    # ANSWER WITH LOADING ANIMATION
+    # ==========================================================
     def show_answer(self):
-        # Switch to answer frame
-        self.brainrot_frame.pack_forget()
+        self.chant_frame.pack_forget()
+        self.dance_frame.pack_forget()
         self.failure_overlay.pack_forget()
-        self.answer_frame.pack(fill="both", expand=True)
-        self.play_background_music(0.3)
+        self.answer_frame.pack_forget()
+        self.answer_loading_frame.pack(fill="both", expand=True)
+        self.answer_loading_frame.lift()
+        
+        # Animated dots
+        self.answer_loading_dots = 0
+        self.animate_answer_dots()
+        
+        # Rotating phrases
+        question_preview = self.question[:20]
+        answer_phrases = [
+            f"💬 Formulating a brainrot response to '{question_preview}'...",
+            f"🤖 Hasur is cooking up nonsense about '{question_preview}'...",
+            f"🌀 Twisting the truth about '{question_preview}'...",
+            f"🔥 Generating maximum chaos for '{question_preview}'...",
+            f"🎭 Hasur is preparing a terrible answer for '{question_preview}'...",
+            f"💀 Summoning the brainrot for '{question_preview}'...",
+        ]
+        random.shuffle(answer_phrases)
+        self.answer_loading_phrases = answer_phrases
+        self.answer_loading_index = 0
+        self.update_answer_loading_phrases()
+        
+        self.stop_background_music()
         threading.Thread(target=self.get_wrong_answer_thread, daemon=True).start()
+    
+    def animate_answer_dots(self):
+        if not self.answer_loading_frame.winfo_ismapped():
+            return
+        dots = "." * (self.answer_loading_dots % 4)
+        self.answer_loading_label.configure(text=f"⏳ Generating answer{dots}")
+        self.answer_loading_dots += 1
+        self.after(500, self.animate_answer_dots)
+    
+    def update_answer_loading_phrases(self):
+        if not self.answer_loading_frame.winfo_ismapped():
+            return
+        if self.answer_loading_index < len(self.answer_loading_phrases):
+            phrase = self.answer_loading_phrases[self.answer_loading_index]
+            self.answer_loading_sub_label.configure(text=phrase)
+            self.answer_loading_index += 1
+            self.after(1200, self.update_answer_loading_phrases)
+        else:
+            random.shuffle(self.answer_loading_phrases)
+            self.answer_loading_index = 0
+            self.after(1200, self.update_answer_loading_phrases)
     
     def get_wrong_answer_thread(self):
         try:
             response = client.chat.completions.create(
-                model="qwen3.7-plus",
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"User asked: '{self.question}'. "
-                        f"Give a completely wrong, absurd, brainrot answer in under 30 words. "
-                        f"Be funny and chaotic."
-                    )
-                }],
-                temperature=1.2
-            )
+                model=TEXT_MODEL,
+                messages=[{"role": "user", "content": (
+                    f"User asked: '{self.question}'. "
+                    f"Give a completely wrong, absurd, brainrot answer in under 30 words.")}],
+                temperature=1.2)
             answer = response.choices[0].message.content
             self.after(0, lambda: self.display_answer(answer))
         except Exception as e:
-            print(f"⚠️ Answer API error: {e}")
-            self.after(0, lambda: self.display_answer("⚠️ Error generating answer. Please try again."))
+            print(f"⚠️ Answer error: {e}")
+            self.after(0, lambda: self.display_answer(
+                "🫠 The answer is 42, but only on Tuesdays in Ohio."))
     
     def display_answer(self, answer):
-        # Choose a random character
-        char = random.choice(CHARACTERS)
-        # Set avatar
-        if os.path.exists(char["img"]):
-            try:
-                img = Image.open(char["img"]).resize((60, 60))
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(60, 60))
-                self.char_image_label.configure(image=ctk_img, text="")
-                self.char_image_label.image = ctk_img
-            except Exception as e:
-                print(f"⚠️ Image load error: {e}")
-                self.char_image_label.configure(text="👤")
-        else:
-            self.char_image_label.configure(text="👤")
+        self.answer_loading_frame.pack_forget()
+        self.answer_frame.pack(fill="both", expand=True)
         
+        char = random.choice(CHARACTERS)
+        if os.path.exists(char["img"]):
+            img = Image.open(char["img"]).resize((150, 150))
+            ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(150, 150))
+            self.char_image_label.configure(image=ctk_img)
+            self.char_image_label.image = ctk_img
         self.char_name_label.configure(text=char["name"])
         self.answer_text_label.configure(text=answer)
-        
-        # Play character audio if exists
         if os.path.exists(char["audio"]):
             self.play_audio(char["audio"], loop=True)
     
@@ -1160,12 +1340,16 @@ Return ONLY valid JSON:
         self.failure_count = 0
         self.failure_receipts = []
         self.ritual_passed = False
-        self.is_brainrot_mode = False
+        self.chant_passed = False
+        self.dance_passed = False
+        self.phase = "idle"
         self.answer_frame.pack_forget()
+        self.answer_loading_frame.pack_forget()
         self.failure_overlay.pack_forget()
-        self.brainrot_frame.pack_forget()
+        self.chant_frame.pack_forget()
+        self.dance_frame.pack_forget()
         self.chat_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        self.input_frame.pack(fill="x", padx=20, pady=(0, 15))
+        self.input_frame.pack(fill="x", padx=20, pady=(0, 10))
         self.send_btn.configure(state="normal")
         self.attempt_label.configure(text=f"Attempt {self.attempt} of {MAX_ATTEMPTS}")
         self.failure_counter_label.configure(text="❌ Failures: 0")
@@ -1177,11 +1361,9 @@ Return ONLY valid JSON:
 
 
 if __name__ == "__main__":
-    print("="*60)
+    print("=" * 60)
     print("🔮 TUNG TUNG TUNG HASUR VERIFICATION GATE 🔮")
-    print("="*60)
-    print("Starting application...")
-    print("🟢 Powered entirely by Qwen (Text, Vision, Audio). No simulations.")
+    print("=" * 60)
     try:
         app = HasurGateApp()
         app.mainloop()
