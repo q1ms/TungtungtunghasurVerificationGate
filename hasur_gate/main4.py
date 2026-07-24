@@ -65,8 +65,8 @@ BRAINROT_FAILURES = [
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# ---- Easy chant mode: always pass or accept any brainrot ----
-CHANT_EASY_MODE = True   # set to False if you want strict phrase matching
+# ---- VOLUME GAIN ----
+DB_GAIN = 8000            # higher = more sensitive
 
 class HasurGateApp(ctk.CTk):
     def __init__(self):
@@ -166,6 +166,8 @@ class HasurGateApp(ctk.CTk):
         self.audio_text = ""
         self.audio_loudness = 0
         self.live_decibel = 0.0
+        self.display_db = 0.0
+        self.decay_timer = None
         self.actual_loudness_percent = 0
         self.live_db_readings = []
 
@@ -442,9 +444,9 @@ class HasurGateApp(ctk.CTk):
             if ret:
                 frame = cv2.flip(frame, 1)
                 if self.is_recording and self.phase == "chant":
-                    db = int(min(100, self.live_decibel))
+                    db = int(min(100, self.display_db))
                     cv2.rectangle(frame, (10, 30), (10 + db * 4, 65), (100, 100, 100), -1)
-                    cv2.putText(frame, f"{self.live_decibel:.0f} dB", (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
+                    cv2.putText(frame, f"{db:.0f} dB", (10, 95), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (200, 200, 200), 2)
 
                 if self.is_recording and self.phase == "dance":
                     if self.frame_counter % 1 == 0:
@@ -702,6 +704,7 @@ class HasurGateApp(ctk.CTk):
         self.realtime_claps = 0
         self.audio_text = ""
         self.live_decibel = 0
+        self.display_db = 0
         self.live_db_readings = []
         self.stop_background_music()
 
@@ -743,13 +746,14 @@ class HasurGateApp(ctk.CTk):
         self.dance_start_btn.configure(state="normal", text="💃 START DANCING")
 
     # ---------------------------------------------
-    # SESSION 1: CHANTING – EASY MODE
+    # SESSION 1: CHANTING – LENIENT DETECTION
     # ---------------------------------------------
     def start_chant_phase(self):
         self.chant_start_btn.configure(state="disabled", text="🎤 CHANTING...")
         self.chant_instruction_label.configure(text="🎤 CHANT NOW! Speak loudly!", text_color="#888")
         self.chant_heard_label.configure(text="🎤 Heard: Listening...")
         self.live_db_readings = []
+        self.display_db = 0
         threading.Thread(target=self.run_chant_recording, daemon=True).start()
 
     def run_chant_recording(self):
@@ -763,9 +767,9 @@ class HasurGateApp(ctk.CTk):
         def audio_cb(indata, frames, time_info, status):
             self.audio_data.append(indata.copy())
             rms = np.sqrt(np.mean(indata ** 2))
-            db = min(100, int(rms * 5000))
+            db = min(100, int(rms * DB_GAIN))
             if db == 0 and rms > 0.0001:
-                db = 5
+                db = 10
             self.live_decibel = db
             self.live_db_readings.append(db)
             self.after(0, lambda v=db: self.update_chant_decibel(v))
@@ -774,9 +778,29 @@ class HasurGateApp(ctk.CTk):
         stream.start()
         self.after(0, lambda: self.chant_countdown(duration, stream, chant_wav))
 
-    def update_chant_decibel(self, db):
-        self.chant_decibel_bar.set(min(1.0, db / 100))
-        self.chant_db_label.configure(text=f"{db:.0f} dB")
+    def update_chant_decibel(self, new_db):
+        if new_db > self.display_db:
+            self.display_db = new_db
+            self.chant_decibel_bar.set(min(1.0, self.display_db / 100))
+            self.chant_db_label.configure(text=f"{self.display_db:.0f} dB")
+            if self.decay_timer is not None:
+                self.after_cancel(self.decay_timer)
+                self.decay_timer = None
+        else:
+            if self.decay_timer is None:
+                self.schedule_decay()
+
+    def schedule_decay(self):
+        if self.display_db > self.live_decibel + 0.5:
+            self.display_db = max(self.live_decibel, self.display_db - 2)
+            self.chant_decibel_bar.set(min(1.0, self.display_db / 100))
+            self.chant_db_label.configure(text=f"{self.display_db:.0f} dB")
+            self.decay_timer = self.after(200, self.schedule_decay)
+        else:
+            self.display_db = self.live_decibel
+            self.chant_decibel_bar.set(min(1.0, self.display_db / 100))
+            self.chant_db_label.configure(text=f"{self.display_db:.0f} dB")
+            self.decay_timer = None
 
     def chant_countdown(self, time_left, stream, chant_wav):
         if time_left <= 0:
@@ -808,9 +832,9 @@ class HasurGateApp(ctk.CTk):
                     audio_array = audio_array.mean(axis=1)
                 audio_float = audio_array.astype(np.float64) / 32768.0
                 rms = np.sqrt(np.mean(audio_float ** 2))
-                avg_db = min(100, int(rms * 5000))
+                avg_db = min(100, int(rms * DB_GAIN))
                 if avg_db == 0 and rms > 0.0001:
-                    avg_db = 5
+                    avg_db = 10
             
             self.actual_loudness_percent = avg_db
             self.after(0, lambda: self.chant_decibel_bar.set(min(1.0, avg_db / 100)))
@@ -869,39 +893,21 @@ class HasurGateApp(ctk.CTk):
             else:
                 transcription = ""
 
-            # ---- EASY CHANT MODE ----
-            if CHANT_EASY_MODE:
-                # Pass if transcription is not empty OR contains any brainrot phrase
-                if transcription.strip():
-                    passed = True
-                    reason = "User spoke something (easy mode)"
-                else:
-                    passed = True   # always pass in easy mode if API fails
-                    reason = "Easy mode fallback"
-            else:
-                # Strict mode: check for phrase
-                detected_text = transcription.lower()
-                required_phrase = self.required_chant.lower()
-                phrase_detected = required_phrase in detected_text or detected_text in required_phrase
-                if not phrase_detected:
-                    alt_phrase = required_phrase.replace("hasur", "sahur")
-                    phrase_detected = alt_phrase in detected_text or detected_text in alt_phrase
-                brainrot_detected = any(phrase in detected_text for phrase in self.brainrot_phrases)
-                passed = phrase_detected or brainrot_detected
-
-            # If transcription is empty but easy mode, set to a dummy text
-            if not transcription and CHANT_EASY_MODE:
-                transcription = "TUNG TUNG TUNG HASUR (simulated)"
-                passed = True
+            # ---- LENIENT MATCHING ----
+            detected_text = transcription.lower()
+            # Check if "tung" and "hasur" (or "sahur") appear anywhere
+            has_tung = "tung" in detected_text
+            has_hasur = "hasur" in detected_text or "sahur" in detected_text
+            passed = has_tung and has_hasur
 
             result = {
                 "transcription": transcription or "(silence)",
                 "detected_volume": self.required_volume,
                 "phrase_correct": passed,
-                "brainrot_detected": True if passed else False,
+                "brainrot_detected": False,
                 "volume_sufficient": True,
                 "passed": passed,
-                "reason": "Easy mode" if CHANT_EASY_MODE else ("Phrase detected" if passed else "Nothing detected"),
+                "reason": "Lenient match passed" if passed else "Missing 'tung' or 'hasur'",
                 "loudness_percent": avg_db
             }
 
@@ -913,19 +919,20 @@ class HasurGateApp(ctk.CTk):
         except Exception as e:
             print(f"⚠️ Chant error: {e}")
             avg_db = self.actual_loudness_percent or 0
+            # Fallback: we can still try to pass if we have any valid transcription
             fallback = {
-                "passed": True,
-                "reason": "Qwen-Audio fallback (demo mode)",
-                "transcription": self.required_chant,
-                "detected_phrase": self.required_chant,
+                "passed": False,
+                "reason": f"Qwen-Audio error: {e}",
+                "transcription": "Error",
+                "detected_phrase": "",
                 "detected_volume": self.required_volume,
-                "phrase_correct": True,
-                "brainrot_detected": True,
+                "phrase_correct": False,
+                "brainrot_detected": False,
                 "volume_sufficient": True,
                 "loudness_percent": avg_db
             }
             self.audio_analysis_result = fallback
-            self.chant_passed = True
+            self.chant_passed = False
             self.audio_text = fallback["transcription"]
             self.after(0, lambda: self.show_chant_result(fallback))
 
