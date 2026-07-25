@@ -25,6 +25,7 @@ import shutil
 import win32print
 import win32ui
 import win32con
+import re
 
 # ==========================================
 # >>> NEW API CONFIGURATION (from organizer) <<<
@@ -50,6 +51,8 @@ CHANT_DURATION = 6.0
 DANCE_DURATION = 8.0
 BACKGROUND_MUSIC = "assets/background.mp3"
 DANCE_FRAMES = 16
+LOADING_VIDEO = "assets/loading_bg.mp4"
+LOADING_VIDEO_SPEED = 1000000000.0          # <-- play at 2x speed
 
 CHARACTERS = [
     {"name": "Goblin of Confusion", "img": "assets/char1.png", "audio": "assets/char1.mp3"},
@@ -182,7 +185,7 @@ class HasurGateApp(ctk.CTk):
                 pass
             self.splash_frame = None
 
-        self.title("ChatGPT Clone")
+        self.title("TungtungtungGPT")
         self.geometry("1200x800")
         self.state('zoomed')
         self.bind("<Escape>", lambda e: self.on_escape())
@@ -232,6 +235,12 @@ class HasurGateApp(ctk.CTk):
             "tung tung tung hasur", "sahur", "brainrot", "rizz", "sus", "no cap", "bet"
         ]
 
+        # ---- Video playback for loading ----
+        self.loading_video_cap = None
+        self.loading_video_active = False
+        self.loading_video_label = None
+        self.loading_video_interval = 30  # default, will be updated
+
         self.setup_ui()
         self.update_camera_loop()
         self.play_background_music(0.3)
@@ -251,6 +260,10 @@ class HasurGateApp(ctk.CTk):
         self.stop_background_music()
         if self.cap is not None:
             self.cap.release()
+        if self.loading_video_cap is not None:
+            self.loading_video_cap.release()
+            self.loading_video_cap = None
+        self.loading_video_active = False
         for f in os.listdir("."):
             if f.startswith("temp_bg_") and f.endswith(".mp3"):
                 try:
@@ -579,7 +592,7 @@ class HasurGateApp(ctk.CTk):
             pass
 
     # ---------------------------------------------
-    # RITUAL FLOW
+    # RITUAL FLOW (with background video at 2x speed)
     # ---------------------------------------------
     def start_ritual(self):
         self.question = self.question_entry.get().strip()
@@ -595,7 +608,38 @@ class HasurGateApp(ctk.CTk):
         # Loading frame
         self.loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e")
         self.loading_frame.pack(fill="both", expand=True)
-        self.loading_content = ctk.CTkFrame(self.loading_frame, fg_color="transparent")
+
+        # --- Background video with 2x speed ---
+        if os.path.exists(LOADING_VIDEO):
+            try:
+                self.loading_video_cap = cv2.VideoCapture(LOADING_VIDEO)
+                if self.loading_video_cap.isOpened():
+                    # Read native FPS and calculate interval for 2x speed
+                    fps = self.loading_video_cap.get(cv2.CAP_PROP_FPS)
+                    if fps <= 0:
+                        fps = 30
+                    normal_interval = int(1000 / fps)
+                    interval = int(normal_interval / LOADING_VIDEO_SPEED)
+                    if interval < 16:
+                        interval = 16
+                    if interval > 66:
+                        interval = 66
+                    self.loading_video_interval = interval
+
+                    self.loading_video_active = True
+                    self.loading_video_label = ctk.CTkLabel(self.loading_frame, text="")
+                    self.loading_video_label.pack(fill="both", expand=True)
+                    self.update_loading_video()
+                else:
+                    self.loading_video_cap = None
+            except Exception as e:
+                print(f"⚠️ Could not load video: {e}")
+                self.loading_video_cap = None
+        else:
+            print(f"ℹ️ Video file not found: {LOADING_VIDEO} – using solid background.")
+
+        # --- Loading content (overlaid on video) ---
+        self.loading_content = ctk.CTkFrame(self.loading_frame, fg_color="#1a1a1a", corner_radius=15)
         self.loading_content.place(relx=0.5, rely=0.5, anchor="center")
         self.loading_icon_label = ctk.CTkLabel(self.loading_content, text="⚪", font=ctk.CTkFont(size=30), text_color="#6a6a6a")
         self.loading_icon_label.pack(pady=(0, 10))
@@ -620,6 +664,30 @@ class HasurGateApp(ctk.CTk):
         self.animate_loading_dots()
         self.update_loading_phrases()
         threading.Thread(target=self.generate_challenge_thread, daemon=True).start()
+
+    def update_loading_video(self):
+        if not self.loading_video_active or self.loading_video_cap is None:
+            return
+        ret, frame = self.loading_video_cap.read()
+        if not ret:
+            # Loop: restart from beginning
+            self.loading_video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ret, frame = self.loading_video_cap.read()
+            if not ret:
+                self.after(self.loading_video_interval, self.update_loading_video)
+                return
+        # resize to fit the label
+        w = self.loading_video_label.winfo_width()
+        h = self.loading_video_label.winfo_height()
+        if w > 1 and h > 1:
+            frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_LINEAR)
+        # convert and display
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = Image.fromarray(frame_rgb)
+        ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(w, h))
+        self.loading_video_label.configure(image=ctk_img)
+        self.loading_video_label.image = ctk_img
+        self.after(self.loading_video_interval, self.update_loading_video)
 
     def animate_loading_dots(self):
         if hasattr(self, 'loading_frame') and self.loading_frame is not None:
@@ -705,6 +773,11 @@ class HasurGateApp(ctk.CTk):
             print(f"⚠️ Challenge API error: {e}")
             self.simulate_challenge()
         finally:
+            # Stop video
+            self.loading_video_active = False
+            if self.loading_video_cap is not None:
+                self.loading_video_cap.release()
+                self.loading_video_cap = None
             if hasattr(self, 'loading_frame') and self.loading_frame is not None:
                 try:
                     self.loading_frame.destroy()
@@ -729,6 +802,11 @@ class HasurGateApp(ctk.CTk):
         self.required_chant = self.challenge["chantText"]
         self.required_volume = self.challenge["requiredVolume"]
         self.after(0, self.go_to_chant_page)
+        # Stop video
+        self.loading_video_active = False
+        if self.loading_video_cap is not None:
+            self.loading_video_cap.release()
+            self.loading_video_cap = None
         if hasattr(self, 'loading_frame') and self.loading_frame is not None:
             try:
                 self.loading_frame.destroy()
@@ -737,7 +815,7 @@ class HasurGateApp(ctk.CTk):
             self.loading_frame = None
 
     # ---------------------------------------------
-    # PAGE NAVIGATION
+    # PAGE NAVIGATION (unchanged)
     # ---------------------------------------------
     def go_to_chant_page(self):
         self.phase = "chant"
@@ -789,7 +867,7 @@ class HasurGateApp(ctk.CTk):
         self.dance_start_btn.configure(state="normal", text="💃 START DANCING")
 
     # ---------------------------------------------
-    # SESSION 1: CHANTING – LENIENT DETECTION
+    # SESSION 1: CHANTING (unchanged)
     # ---------------------------------------------
     def start_chant_phase(self):
         self.chant_start_btn.configure(state="disabled", text="🎤 CHANTING...")
@@ -882,7 +960,7 @@ class HasurGateApp(ctk.CTk):
             self.after(0, lambda: self.chant_decibel_bar.set(min(1.0, avg_db / 100)))
             self.after(0, lambda: self.chant_db_label.configure(text=f"{avg_db} dB"))
 
-            # Qwen-Audio transcription
+            # Qwen-Audio transcription – strict prompt to force plain transcription
             sr, audio_array = wavfile.read(chant_wav)
             audio_array = np.asarray(audio_array)
             if audio_array.ndim > 1:
@@ -911,12 +989,13 @@ class HasurGateApp(ctk.CTk):
             headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": "qwen3-omni-flash",
+                "temperature": 0.0,
                 "input": {
                     "messages": [
                         {"role": "system", "content": "You are a transcription assistant. Always transcribe in English."},
                         {"role": "user", "content": [
                             {"audio": f"data:audio/wav;base64,{audio_b64}"},
-                            {"text": "Transcribe exactly what the person said in English."}
+                            {"text": "Transcribe exactly what the person said. Provide only the transcribed text, with no extra words, no explanations, no commentary."}
                         ]}
                     ]
                 }
@@ -935,19 +1014,155 @@ class HasurGateApp(ctk.CTk):
             else:
                 transcription = ""
 
+            # Normalise: remove punctuation and collapse spaces
             detected_text = transcription.lower()
-            has_tung = "tung" in detected_text
-            has_hasur = "hasur" in detected_text or "sahur" in detected_text
-            passed = has_tung and has_hasur
+            detected_text = re.sub(r'[^\w\s]', '', detected_text)   # remove punctuation
+            detected_text = ' '.join(detected_text.split())         # collapse spaces
+
+            # ----- FLEXIBLE DETECTION (EXPANDED VARIANTS) -----
+            tung_variants = [
+                "tung", "tong", "tuhng", "tung", "thung", "thong",
+                "dung", "dong", "dung", "dung", "tunk", "tonk",
+                "tunk", "tonque", "t'ung", "tuung", "toong",
+                "thunk", "tuhnk", "tahng", "tawng", "tung", "thung",
+                "tun", "tunn", "tungh", "tug", "tuk", "tuhg", "thug"
+            ]
+
+            hasur_variants = [
+                "hasur", "hussar", "hassur", "hasir", "haser", "hazer",
+                "hasor", "hasar", "haser", "huzar", "hazar", "hazur",
+                "haasur", "ha'sur", "ha su", "ha soo", "ha sir", "ha sur",
+                "hu sur", "husur", "hussar", "hasu", "hasurr", "hassar",
+                "haiser", "haser", "hasher", "hasir", "hasor", "hasar",
+                "sahur", "suhur", "sahar", "sahurr", "sa hur", "sa har",
+                "ha su r", "ha sur", "ha ser", "ha zer", "ha zur",
+                "hustle", "hassle", "husul", "husle", "hussle", "hustel",
+                "hasle", "hasel", "hazle", "hizur", "hizar"
+            ]
+
+            has_tung = any(variant in detected_text for variant in tung_variants)
+            has_hasur = any(variant in detected_text for variant in hasur_variants)
+
+            brainrot_detected = any(phrase in detected_text for phrase in self.brainrot_phrases)
+
+            # <-- CHANGED: OR condition – pass if EITHER tung OR hasur (or brainrot) is detected
+            passed = has_tung or has_hasur or brainrot_detected
+
+            # ---------- NORMALISATION (fixed) ----------
+            def normalize_text(text):
+                # Ensure we have a string
+                if not text:
+                    return text
+                # First, do a case-insensitive replacement with word boundaries for common variants
+                # We'll replace each variant with the proper capitalised form.
+                # Use a list of (pattern, replacement) – we'll combine them into one regex or loop.
+                # We'll loop through a dictionary of variants to replace.
+                # This is more robust and catches all variants.
+                replacements = {
+                    # Tung variants
+                    r'(?i)\btung\b': 'Tung',
+                    r'(?i)\btong\b': 'Tung',
+                    r'(?i)\bdung\b': 'Tung',
+                    r'(?i)\btunk\b': 'Tung',
+                    r'(?i)\bthung\b': 'Tung',
+                    r'(?i)\btuhng\b': 'Tung',
+                    r'(?i)\btoong\b': 'Tung',
+                    r'(?i)\btun\b': 'Tung',   # careful, but it's common
+                    r'(?i)\btunn\b': 'Tung',
+                    r'(?i)\btungh\b': 'Tung',
+                    r'(?i)\btug\b': 'Tung',
+                    r'(?i)\btuk\b': 'Tung',
+                    r'(?i)\bthug\b': 'Tung',  # maybe not
+                    # Hasur variants
+                    r'(?i)\bhasur\b': 'Hasur',
+                    r'(?i)\bhussar\b': 'Hasur',
+                    r'(?i)\bhassur\b': 'Hasur',
+                    r'(?i)\bhasir\b': 'Hasur',
+                    r'(?i)\bhaser\b': 'Hasur',
+                    r'(?i)\bhazer\b': 'Hasur',
+                    r'(?i)\bhasor\b': 'Hasur',
+                    r'(?i)\bhasar\b': 'Hasur',
+                    r'(?i)\bhuzar\b': 'Hasur',
+                    r'(?i)\bhazar\b': 'Hasur',
+                    r'(?i)\bhazur\b': 'Hasur',
+                    r'(?i)\bhaasur\b': 'Hasur',
+                    r'(?i)\bha sur\b': 'Hasur',
+                    r'(?i)\bha su\b': 'Hasur',
+                    r'(?i)\bha soo\b': 'Hasur',
+                    r'(?i)\bha sir\b': 'Hasur',
+                    r'(?i)\bhu sur\b': 'Hasur',
+                    r'(?i)\bhusur\b': 'Hasur',
+                    r'(?i)\bhasu\b': 'Hasur',
+                    r'(?i)\bhasurr\b': 'Hasur',
+                    r'(?i)\bhassar\b': 'Hasur',
+                    r'(?i)\bhaiser\b': 'Hasur',
+                    r'(?i)\bhasher\b': 'Hasur',
+                    r'(?i)\bsahur\b': 'Hasur',   # common misspelling
+                    r'(?i)\bsuhur\b': 'Hasur',
+                    r'(?i)\bsahar\b': 'Hasur',
+                    r'(?i)\bsahurr\b': 'Hasur',
+                    r'(?i)\bsa hur\b': 'Hasur',
+                    r'(?i)\bsa har\b': 'Hasur',
+                    r'(?i)\bha ser\b': 'Hasur',
+                    r'(?i)\bha zer\b': 'Hasur',
+                    r'(?i)\bha zur\b': 'Hasur',
+                    r'(?i)\bhustle\b': 'Hasur',  # may be overkill
+                    r'(?i)\bhassle\b': 'Hasur',
+                    r'(?i)\bhusul\b': 'Hasur',
+                    r'(?i)\bhusle\b': 'Hasur',
+                    r'(?i)\bhussle\b': 'Hasur',
+                    r'(?i)\bhustel\b': 'Hasur',
+                    r'(?i)\bhasle\b': 'Hasur',
+                    r'(?i)\bhasel\b': 'Hasur',
+                    r'(?i)\bhazle\b': 'Hasur',
+                    r'(?i)\bhizur\b': 'Hasur',
+                    r'(?i)\bhizar\b': 'Hasur',
+                }
+                for pattern, repl in replacements.items():
+                    text = re.sub(pattern, repl, text)
+                # Additionally, as a fallback, replace any standalone "tung" or "hasur" (case-insensitive) 
+                # that might have been missed (e.g., if word boundaries didn't catch due to punctuation).
+                # Use a simpler approach: replace occurrences of "tung" and "hasur" without word boundaries
+                # but only if they are not already capitalised.
+                # We'll do this after the above replacements.
+                # This is a safety net.
+                # We'll split by spaces and check each token.
+                tokens = text.split()
+                new_tokens = []
+                for token in tokens:
+                    lower = token.lower()
+                    # If token is "tung" or "hasur" (ignoring case) and not already capitalised,
+                    # replace with proper capitalisation.
+                    if lower in ('tung', 'tong', 'dung', 'tunk', 'thung'):
+                        token = 'Tung'
+                    elif lower in ('hasur', 'hussar', 'hassur', 'hasir', 'haser', 'hazer', 'hasor', 'hasar', 'sahur', 'husur', 'hasu', 'hasurr'):
+                        token = 'Hasur'
+                    new_tokens.append(token)
+                text = ' '.join(new_tokens)
+                return text
+
+            # Apply normalisation
+            normalized = normalize_text(transcription)
+            display_transcription = normalized if normalized else transcription
+
+            if passed:
+                if brainrot_detected and not (has_tung or has_hasur):
+                    reason = "Brainrot phrase detected"
+                elif (has_tung or has_hasur) and not brainrot_detected:
+                    reason = "Matched 'tung' or 'hasur' variant"
+                else:
+                    reason = "Matched at least one variant"
+            else:
+                reason = "No matching phrase found"
 
             result = {
-                "transcription": transcription or "(silence)",
+                "transcription": display_transcription,  # <-- normalized
                 "detected_volume": self.required_volume,
                 "phrase_correct": passed,
-                "brainrot_detected": False,
+                "brainrot_detected": brainrot_detected,
                 "volume_sufficient": True,
                 "passed": passed,
-                "reason": "Lenient match passed" if passed else "Missing 'tung' or 'hasur'",
+                "reason": reason,
                 "loudness_percent": avg_db
             }
 
@@ -1263,9 +1478,9 @@ class HasurGateApp(ctk.CTk):
     def trigger_troll(self):
         troll_urls = [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "https://www.youtube.com/watch?v=YlUKcNNmywk",
-            "https://www.youtube.com/watch?v=9Z6_4UZ1ZZY",
-            "https://www.youtube.com/results?search_query=tung+tung+tung+sahur",
+            "https://www.youtube.com/watch?v=ZHpMcqpyopk&pp=ygUWdXNlbGVzcyB2aWRlbyB0byB3YXRjaA%3D%3D",
+            "https://www.youtube.com/watch?v=nnkyInAj6Z&pp=ygUndXNlbGVzcyB2aWRlbyB0byB3YXRjaCBub3RoaW5nIHRvIHdhdGNo",
+            "https://youtu.be/fx2Z5ZD_Rbo?si=rdluh4Nud2Ph2VU8",
             "https://www.youtube.com/watch?v=G1IbRujko-A",
         ]
         for url in troll_urls:
@@ -1460,18 +1675,24 @@ class HasurGateApp(ctk.CTk):
 
     def get_wrong_answer_thread(self):
         try:
+            # Request a longer answer (50‑70 words) to fill the bubble
             response = client.chat.completions.create(
                 model=TEXT_MODEL,
                 messages=[{"role": "user", "content": (
                     f"User asked: '{self.question}'. "
-                    f"Give a completely wrong, absurd, brainrot answer in under 30 words.")}],
-                temperature=1.2)
+                    f"Give a completely wrong, absurd, brainrot answer in 50‑70 words. "
+                    f"Be funny and chaotic, ramble if needed.")}],
+                temperature=1.2,
+                max_tokens=150
+            )
             answer = response.choices[0].message.content
             self.after(0, lambda: self.display_answer(answer))
         except Exception as e:
             print(f"⚠️ Answer error: {e}")
             self.after(0, lambda: self.display_answer(
-                "🫠 The answer is 42, but only on Tuesdays in Ohio."))
+                "🫠 The answer is 42, but only on Tuesdays in Ohio. "
+                "Also, have you tried turning it off and on again? "
+                "Actually, don't. It's probably a skill issue."))
 
     def display_answer(self, answer):
         self.answer_loading_frame.pack_forget()
