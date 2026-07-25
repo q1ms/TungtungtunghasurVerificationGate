@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageWin
 import threading
 import time
 import os
@@ -22,22 +22,25 @@ import webbrowser
 from openai import OpenAI
 import requests
 import shutil
+import win32print
+import win32ui
+import win32con
 
 # ==========================================
-# >>> YOUR API CONFIGURATION <<<
+# >>> NEW API CONFIGURATION (from organizer) <<<
 # ==========================================
-API_KEY = "sk-ws-H.XRLLPH.xKTZ.MEQCIDpvzKrBByEb0Z0o3BWRPqhAOOEBNLmtA5dMYOnmICfVAiAojcvIPTMi26CFSUmE-ycj_lYNriHhlrFM2Dnm4PjDGw"
-API_BASE_URL = "https://ws-bf3itnzatquc4sa0.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+API_KEY = "sk-ws-H.XRRPXD.x55J.MEUCIQCROfl1AVSxZctvY8buyizFUM_Fb5xllUjBpP_q6HtOWwIgSn3efQAaM1GJOhRDnMs_qE3y7GqCsyoqF83FYIZUX4M"
+API_BASE_URL = "https://ws-7g7nt6bxawkclbc0.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
 # ==========================================
 
 client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 
 # ==========================================
-# MODEL NAMES
+# MODEL NAMES (UPDATED)
 # ==========================================
-TEXT_MODEL = "qwen3.7-plus"
+TEXT_MODEL = "qwen3.8-max-preview"
 AUDIO_MODEL = "qwen3-omni-flash"
-VISION_MODEL = "qwen-vl-max"       # fallback: qwen-vl-plus, qwen-vl
+VISION_MODEL = "qwen-vl-max"
 
 # ==========================================
 # CONFIGURATION
@@ -67,8 +70,46 @@ BRAINROT_FAILURES = [
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# ---- VOLUME GAIN ----
-DB_GAIN = 8000            # higher = more sensitive
+DB_GAIN = 8000
+
+# ---------- SILENT PRINT FUNCTION ----------
+def silent_print_image(image_path, printer_name=None):
+    """Print an image silently using GDI (win32print). Returns True on success."""
+    try:
+        bmp = Image.open(image_path)
+        if bmp.mode != "RGB":
+            bmp = bmp.convert("RGB")
+
+        if printer_name is None:
+            printer_name = win32print.GetDefaultPrinter()
+
+        dc = win32ui.CreateDC()
+        dc.CreatePrinterDC(printer_name)
+        dc.SetMapMode(win32con.MM_TEXT)
+
+        dc.StartDoc("Silent Print Job")
+        dc.StartPage()
+
+        printable_width = dc.GetDeviceCaps(win32con.HORZRES)
+        printable_height = dc.GetDeviceCaps(win32con.VERTRES)
+
+        img_width, img_height = bmp.size
+        scale = min(printable_width / img_width, printable_height / img_height)
+        scaled_width = int(img_width * scale)
+        scaled_height = int(img_height * scale)
+
+        dib = ImageWin.Dib(bmp)
+        dib.draw(dc.GetHandleOutput(), (0, 0, scaled_width, scaled_height))
+
+        dc.EndPage()
+        dc.EndDoc()
+        dc.DeleteDC()
+        return True
+    except Exception as e:
+        print(f"⚠️ Silent print error: {e}")
+        return False
+
+# ---------------------------------------------
 
 class HasurGateApp(ctk.CTk):
     def __init__(self):
@@ -389,7 +430,7 @@ class HasurGateApp(ctk.CTk):
         self.dance_instruction_label = ctk.CTkLabel(self.dance_scroll, text="", font=ctk.CTkFont(size=16, weight="bold"), text_color="#888")
         self.dance_instruction_label.pack(pady=4)
 
-        # ---- Failure overlay (no receipt) ----
+        # ---- Failure overlay ----
         self.failure_overlay = ctk.CTkFrame(self.main_canvas, fg_color="#3a3a3a", corner_radius=0)
         self.failure_overlay.pack_forget()
         self.failure_content = ctk.CTkFrame(self.failure_overlay, fg_color="transparent")
@@ -551,7 +592,7 @@ class HasurGateApp(ctk.CTk):
         self.title("🔥 HASUR BRAINROT MODE 🔥")
         self.send_btn.configure(state="disabled")
 
-        # Loading frame (centered)
+        # Loading frame
         self.loading_frame = ctk.CTkFrame(self.main_canvas, fg_color="#1e1e1e")
         self.loading_frame.pack(fill="both", expand=True)
         self.loading_content = ctk.CTkFrame(self.loading_frame, fg_color="transparent")
@@ -824,7 +865,6 @@ class HasurGateApp(ctk.CTk):
             if not os.path.exists(chant_wav):
                 raise Exception("Audio not found.")
             
-            # Average dB from live readings
             if self.live_db_readings:
                 avg_db = int(sum(self.live_db_readings) / len(self.live_db_readings))
             else:
@@ -842,7 +882,7 @@ class HasurGateApp(ctk.CTk):
             self.after(0, lambda: self.chant_decibel_bar.set(min(1.0, avg_db / 100)))
             self.after(0, lambda: self.chant_db_label.configure(text=f"{avg_db} dB"))
 
-            # Call Qwen-Audio for transcription
+            # Qwen-Audio transcription
             sr, audio_array = wavfile.read(chant_wav)
             audio_array = np.asarray(audio_array)
             if audio_array.ndim > 1:
@@ -867,7 +907,7 @@ class HasurGateApp(ctk.CTk):
             wavfile.write(buf, target_sr, audio_16k)
             audio_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-            url = "https://ws-bf3itnzatquc4sa0.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+            url = "https://ws-7g7nt6bxawkclbc0.ap-southeast-1.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
             headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
             payload = {
                 "model": "qwen3-omni-flash",
@@ -895,9 +935,7 @@ class HasurGateApp(ctk.CTk):
             else:
                 transcription = ""
 
-            # ---- LENIENT MATCHING ----
             detected_text = transcription.lower()
-            # Check if "tung" and "hasur" (or "sahur") appear anywhere
             has_tung = "tung" in detected_text
             has_hasur = "hasur" in detected_text or "sahur" in detected_text
             passed = has_tung and has_hasur
@@ -921,7 +959,6 @@ class HasurGateApp(ctk.CTk):
         except Exception as e:
             print(f"⚠️ Chant error: {e}")
             avg_db = self.actual_loudness_percent or 0
-            # Fallback: we can still try to pass if we have any valid transcription
             fallback = {
                 "passed": False,
                 "reason": f"Qwen-Audio error: {e}",
@@ -1096,7 +1133,6 @@ class HasurGateApp(ctk.CTk):
                     continue
 
             if result is None:
-                # Fallback motion detection
                 print("🔄 Falling back to local motion detection.")
                 images = sorted([f for f in os.listdir(frame_folder) if f.endswith('.jpg')])
                 frames = [cv2.imread(os.path.join(frame_folder, img)) for img in images if cv2.imread(os.path.join(frame_folder, img)) is not None]
@@ -1192,10 +1228,6 @@ class HasurGateApp(ctk.CTk):
     def evaluate_final_result(self):
         audio_result = self.audio_analysis_result or {}
         vision_result = self.vision_analysis_result or {}
-        audio_score = min(100, audio_result.get("loudness_percent", 50))
-        vision_score = 100 if self.dance_passed else int(
-            min(1.0, self.realtime_spins / max(1, self.required_spins)) * 100)
-
         if self.chant_passed and self.dance_passed:
             self.ritual_passed = True
             self.show_answer()
@@ -1226,17 +1258,15 @@ class HasurGateApp(ctk.CTk):
         return folder
 
     # ---------------------------------------------
-    # TROLL FUNCTIONS (enhanced printing)
+    # TROLL FUNCTIONS (ENHANCED PRINTING)
     # ---------------------------------------------
     def trigger_troll(self):
-        """The ultimate useless troll combo."""
-        # 1. Open YouTube tabs with different troll videos
         troll_urls = [
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",  # Rickroll
-            "https://www.youtube.com/watch?v=YlUKcNNmywk",  # Tung Tung Tung Sahur meme
-            "https://www.youtube.com/watch?v=9Z6_4UZ1ZZY",  # Skibidi Toilet
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://www.youtube.com/watch?v=YlUKcNNmywk",
+            "https://www.youtube.com/watch?v=9Z6_4UZ1ZZY",
             "https://www.youtube.com/results?search_query=tung+tung+tung+sahur",
-            "https://www.youtube.com/watch?v=G1IbRujko-A",  # Sigma male
+            "https://www.youtube.com/watch?v=G1IbRujko-A",
         ]
         for url in troll_urls:
             try:
@@ -1244,10 +1274,8 @@ class HasurGateApp(ctk.CTk):
             except Exception as e:
                 print(f"⚠️ Failed to open {url}: {e}")
 
-        # 2. Print overcomplicated "How to Use This App" manual
         self.print_overcomplicated_manual()
 
-        # 3. Show fake system error
         messagebox.showerror(
             "HASUR.EXE - System Error",
             "HASUR has encountered a critical error.\n\n"
@@ -1259,9 +1287,11 @@ class HasurGateApp(ctk.CTk):
         )
 
     def print_overcomplicated_manual(self):
-        """Generate and print an overcomplicated 2‑page manual directly to the default printer."""
+        """Generate a 2‑page manual and print silently (fallback to dialog)."""
         try:
+            printed = False
             for page in range(1, 3):
+                # --- Image generation (unchanged) ---
                 img = Image.new('RGB', (800, 1100), color='white')
                 draw = ImageDraw.Draw(img)
                 try:
@@ -1311,25 +1341,31 @@ class HasurGateApp(ctk.CTk):
                 temp_file = f"manual_page_{page}.jpg"
                 img.save(temp_file)
 
-                # ---- Print directly ----
-                system = platform.system()
-                try:
-                    if system == "Windows":
-                        # Use the built-in 'print' command (sends to default printer)
-                        subprocess.run(["print", temp_file], shell=True, check=False)
-                    else:
-                        # macOS / Linux: use lp (CUPS)
-                        subprocess.run(["lp", temp_file], check=False)
-                except Exception as e:
-                    print(f"⚠️ Printing error for {temp_file}: {e}")
-                finally:
-                    # Clean up temp file after a short delay (optional)
+                # --- TRY SILENT PRINT ---
+                success = silent_print_image(temp_file)
+                if success:
+                    printed = True
+                    print(f"✅ Printed {temp_file} silently.")
+                else:
+                    # Fallback: open print dialog
                     try:
-                        os.remove(temp_file)
-                    except:
-                        pass
+                        os.startfile(temp_file, "print")
+                        printed = True
+                        print(f"🖨️ Print dialog opened for {temp_file}.")
+                    except Exception as e:
+                        print(f"❌ Could not open print dialog: {e}")
 
-            print("🖨️ Overcomplicated manual sent to printer!")
+                # Clean up temp file
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+
+            if printed:
+                print("✅ Manual printed (silent or via dialog).")
+            else:
+                print("⚠️ No pages were printed.")
+
         except Exception as e:
             print(f"⚠️ Manual generation error: {e}")
 
@@ -1346,7 +1382,6 @@ class HasurGateApp(ctk.CTk):
         self.play_audio(FAILURE_AUDIO)
         self.flash_overlay(16)
 
-        # --- TROLL ON EVERY FAILURE ---
         self.trigger_troll()
 
         self.after(6000, self.advance_attempt)
